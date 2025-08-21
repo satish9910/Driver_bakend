@@ -2,11 +2,13 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../models/user.js";
 import Expenses from "../models/expenses.js";
+import Booking from "../models/Booking.js";
 
 const postExpenses = async (req, res) => {
   try {
     const {
       driverCharge = 0,
+      bookingId,
       cashToll = 0,
       tripRoute = null,
       cashParking = 0,
@@ -38,6 +40,7 @@ const postExpenses = async (req, res) => {
 
     const expense = new Expenses({
       userId: req.user.userId,
+      bookingId,
       driverCharge,
       cashToll,
       tripRoute,
@@ -55,6 +58,14 @@ const postExpenses = async (req, res) => {
     });
 
     await expense.save();
+
+        // 👇 Link expense to the booking
+    await Booking.findByIdAndUpdate(
+      bookingId,
+      { $push: { expenses: expense._id } },
+      { new: true }
+    );
+
 
     res.status(201).json({
       message: "Expense created successfully",
@@ -91,7 +102,7 @@ const getExpenses = async (req, res) => {
         select: "name email mobile" // only include required user fields
       });
 
-      console.log('expenses', expenses);
+      // console.log('expenses', expenses);
       
 
     res.status(200).json({ expenses });
@@ -101,11 +112,29 @@ const getExpenses = async (req, res) => {
   }
 };
 
+// getexpensesbybookingid
 
+const getExpensesByBookingId = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    const expenses = await Expenses.find({ bookingId })
+      .populate({
+        path: "userId",
+        select: "name email mobile" // only include required user fields
+      });
+
+    res.status(200).json({ expenses });
+  } catch (err) {
+    console.error("Error fetching expenses by booking ID:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+};
 
 const expensesController = {
   postExpenses,
-  getExpenses
+  getExpenses,
+  getExpensesByBookingId
 };
 
 export default expensesController;

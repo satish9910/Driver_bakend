@@ -1,30 +1,32 @@
 
 import User from "../models/user.js";
-import Expenses from "../models/expenses.js";
+import Booking from "../models/Booking.js";
 
 
-const getUserDetails = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    const user = await User.findById(userId).select("-password"); // exclude password
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    res.status(200).json({ user });
-  } catch (err) {
-    console.error("Error fetching user details:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+const getalldriverbooks = (req, res) => {
+    console.log("Fetching all driver bookings for user:", req.user.userId);
+  Booking.find({ driver: req.user.userId })
+    .populate("driver", "name email mobile drivercode vehicleNumber")
+    .sort({ createdAt: -1 })
+    .then(bookings => {
+      res.status(200).json({
+        success: true,
+        count: bookings.length,
+        bookings
+      });
+    })
+    .catch(error => {
+      console.error("Error fetching driver bookings:", error);
+      res.status(500).json({ success: false, message: "Server error" });
+    });
 };
 
 
 
 
 const userController = {
-  getUserDetails
+  getalldriverbooks
+  
 };
 
 export default userController;

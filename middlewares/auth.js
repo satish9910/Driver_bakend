@@ -1,4 +1,3 @@
-// middleware/auth.js
 import jwt from "jsonwebtoken";
 
 export const authentication = (req, res, next) => {
@@ -12,7 +11,18 @@ export const authentication = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // contains { userId: ... }
+    req.user = decoded; 
+
+    // console.log("Authenticated user:", req.user);
+
+    // Check for admin or subadmin role
+    if (decoded.role !== "admin" && decoded.role !== "subadmin" && decoded.role !== "user") {
+      return res.status(403).json({ error: "Forbidden: Insufficient role" });
+    }
+
+  // Normalize identifiers so downstream code can rely on userId
+  req.user.userId = decoded.userId || decoded.adminId; 
+
     next();
   } catch (err) {
     console.error("Auth error:", err);
