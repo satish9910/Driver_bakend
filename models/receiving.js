@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 
-// Billing Item sub-schema
 const billingItemSchema = new mongoose.Schema(
   {
     category: {
@@ -15,7 +14,7 @@ const billingItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const expenseSchema = new mongoose.Schema(
+const receivingSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -27,13 +26,10 @@ const expenseSchema = new mongoose.Schema(
       ref: "Booking",
       required: true,
     },
-    // Admin/Subadmin ownership (when created/edited from admin panel)
     createdByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
     createdByRole: { type: String, enum: ["admin", "subadmin"] },
     lastEditedByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
     lastEditedAt: { type: Date },
-
-    // Duty Information
     dutyStartDate: { type: Date, required: true },
     dutyStartTime: { type: String, required: true },
     dutyEndDate: { type: Date, required: true },
@@ -41,34 +37,25 @@ const expenseSchema = new mongoose.Schema(
     dutyStartKm: { type: Number, required: true },
     dutyEndKm: { type: Number, required: true },
     dutyType: { type: String, required: true },
-
-    // Billing Items
-    billingItems: [billingItemSchema],
-
-    // Allowances (Expense Side)
     dailyAllowance: { type: Number, default: 0 },
     outstationAllowance: { type: Number, default: 0 },
     earlyStartAllowance: { type: Number, default: 0 },
     nightAllowance: { type: Number, default: 0 },
+    receivedFromCompany: { type: Number, default: 0 },
+    receivedFromClient: { type: Number, default: 0 },
     overTime: { type: Number, default: 0 },
     sundayAllowance: { type: Number, default: 0 },
     outstationOvernightAllowance: { type: Number, default: 0 },
     extraDutyAllowance: { type: Number, default: 0 },
-
-    // Notes
     notes: { type: String, default: "" },
-
-    // Auto-calculated
+    billingItems: [billingItemSchema],
     totalAllowances: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
-// Ensure unique expense record per user & booking
-expenseSchema.index({ userId: 1, bookingId: 1 }, { unique: true });
-
-// Pre-save hook to auto-calc total allowances
-expenseSchema.pre("save", function (next) {
+receivingSchema.index({ userId: 1, bookingId: 1 }, { unique: true });
+receivingSchema.pre("save", function (next) {
   this.totalAllowances =
     (this.dailyAllowance || 0) +
     (this.outstationAllowance || 0) +
@@ -81,5 +68,4 @@ expenseSchema.pre("save", function (next) {
   next();
 });
 
-export default mongoose.models.Expenses ||
-  mongoose.model("Expenses", expenseSchema);
+export default mongoose.model("Receiving", receivingSchema);

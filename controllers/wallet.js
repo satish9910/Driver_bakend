@@ -70,15 +70,24 @@ export const deductMoneyFromWallet = async (req, res) => {
 
 export const getAllTransactions = async (req, res) => {
   try {
-    if (req.user?.role !== "admin") {
-      return res.status(403).json({ message: "Only admin can view all transactions" });
-    }
-    const transactions = await Transaction.find()
-      .populate("adminId", "name email role") // show admin info
-  .populate("userId", "name email")
-      .sort({ createdAt: -1 }); // latest first
+    const role = req.user?.role;
+    const userId = req.user?.userId;
 
-    res.json(transactions);
+    if (role === "admin") {
+      // Show all admin transactions
+      const transactions = await Transaction.find({ adminId: userId })
+        .populate("adminId", "name email role")
+        .sort({ createdAt: -1 });
+      return res.json(transactions);
+    } else if (role === "subadmin") {
+      // Show all subadmin transactions
+      const transactions = await Transaction.find({ adminId: userId })
+        .populate("adminId", "name email role")
+        .sort({ createdAt: -1 });
+      return res.json(transactions);
+    } else {
+      return res.status(403).json({ message: "Only admin or subadmin can view transactions" });
+    }
   } catch (err) {
     res.status(500).json({ message: "Error fetching transactions", error: err.message });
   }
@@ -99,6 +108,7 @@ export const getMyTransactions = async (req, res) => {
 
 
 // Get wallet details for one admin/subadmin
+
 export const getWalletDetails = async (req, res) => {
   try {
     const { adminId } = req.params;
@@ -137,6 +147,7 @@ export const getWalletDetails = async (req, res) => {
 };
 
 // Transfer money from Admin/Subadmin wallet to a User wallet
+
 export const transferMoneyToUser = async (req, res) => {
   try {
     const { userId, amount, description } = req.body;
@@ -210,6 +221,7 @@ export const transferMoneyToUser = async (req, res) => {
 };
 
 // Get user wallet details (for user or admin viewing)
+
 export const getUserWalletDetails = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -242,6 +254,7 @@ export const getUserWalletDetails = async (req, res) => {
 };
 
 // Get transactions for the authenticated user
+
 export const getMyUserTransactions = async (req, res) => {
   try {
     const userId = req.user?.userId;
@@ -256,11 +269,33 @@ export const getMyUserTransactions = async (req, res) => {
   }
 };
 
+// Admin/Subadmin view transactions for a specific user by ID
+export const getUserTransactionsById = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const role = req.user?.role;
+    if (role !== "admin" && role !== "subadmin") {
+      return res.status(403).json({ message: "Only admin or subadmin can view user transactions" });
+    }
+
+    const user = await User.findById(userId).select("_id");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const transactions = await Transaction.find({ userId })
+      .populate("fromAdminId", "name email role")
+      .sort({ createdAt: -1 });
+    res.json(transactions);
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching user transactions", error: err.message });
+  }
+};
+
 // Admin can credit a user's wallet directly (adjustment)
 export const addMoneyToUserWallet = async (req, res) => {
   try {
-    if (req.user?.role !== "admin") {
-      return res.status(403).json({ message: "Only admin can add to user wallets" });
+    const role = req.user?.role;
+    if (role !== "admin" && role !== "subadmin") {
+      return res.status(403).json({ message: "Only admin or subadmin can add to user wallets" });
     }
     const { userId, amount, description } = req.body;
     if (!userId || amount == null) return res.status(400).json({ message: "userId and amount are required" });
@@ -279,7 +314,7 @@ export const addMoneyToUserWallet = async (req, res) => {
       userId: user._id,
       amount: amt,
       type: "credit",
-      description: description || "Admin credit",
+      description: description || `${role} credit`,
       balanceAfter: user.wallet.balance,
       category: "user_wallet",
     });
@@ -290,11 +325,12 @@ export const addMoneyToUserWallet = async (req, res) => {
   }
 };
 
-// Admin can debit a user's wallet directly (adjustment)
+// Admin or subadmin can debit a user's wallet directly (adjustment)
 export const deductMoneyFromUserWallet = async (req, res) => {
   try {
-    if (req.user?.role !== "admin") {
-      return res.status(403).json({ message: "Only admin can deduct from user wallets" });
+    const role = req.user?.role;
+    if (role !== "admin" && role !== "subadmin") {
+      return res.status(403).json({ message: "Only admin or subadmin can deduct from user wallets" });
     }
     const { userId, amount, description } = req.body;
     if (!userId || amount == null) return res.status(400).json({ message: "userId and amount are required" });
@@ -313,7 +349,7 @@ export const deductMoneyFromUserWallet = async (req, res) => {
       userId: user._id,
       amount: amt,
       type: "debit",
-      description: description || "Admin debit",
+      description: description || `${role} debit`,
       balanceAfter: user.wallet.balance,
       category: "user_wallet",
     });
@@ -414,3 +450,132 @@ export const getMyWalletDetails = async (req, res) => {
     res.status(500).json({ message: "Error fetching my wallet", error: err.message });
   }
 };
+
+
+//admin can see sub admin wallet and his transaction also add and deduct money
+
+
+export const getSubAdminWalletById = async (req, res) => {
+  try {
+    const { subAdminId } = req.params;
+
+    const subAdmin = await Admin.findById(subAdminId).select("name email role wallet");
+    if (!subAdmin || subAdmin.role !== "subadmin") {
+      return res.status(404).json({ message: "Subadmin not found" });
+    }
+
+    const transactions = await Transaction.find({ adminId: subAdminId, category: { $in: ["admin_wallet", "transfer"] } });
+
+    const totalCredit = transactions
+      .filter((t) => t.type === "credit")
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    const totalDebit = transactions
+      .filter((t) => t.type === "debit")
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    res.json({
+      subAdmin: { id: subAdmin._id, name: subAdmin.name, email: subAdmin.email, role: subAdmin.role },
+      wallet: {
+        balance: subAdmin.wallet?.balance || 0,
+        totalCredit,
+        totalDebit,
+        transactionsCount: transactions.length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching subadmin wallet", error: err.message });
+  }
+};
+
+export const addMoneyToSubAdminWallet = async (req, res) => {
+
+  try{
+    const { subAdminId, amount, description } = req.body;
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ message: "Only admin can add money to subadmin wallets" });
+    }
+
+    const subAdmin = await Admin.findById(subAdminId);
+    if (!subAdmin || subAdmin.role !== "subadmin") {
+      return res.status(404).json({ message: "Subadmin not found" });
+    }
+
+    // update balance
+    subAdmin.wallet.balance += amount;
+    await subAdmin.save();
+
+    // save transaction
+    const transaction = await Transaction.create({
+      fromAdminId: req.user.userId,
+      adminId: subAdmin._id,
+      amount,
+      type: "credit",
+      description,
+      balanceAfter: subAdmin.wallet.balance,
+      category: "admin_wallet",
+    });
+
+    res.json({ message: "Money added successfully", wallet: subAdmin.wallet, transaction });
+  } catch (err) {
+    res.status(500).json({ message: "Error adding money to subadmin wallet", error: err.message });
+  }
+};
+
+export const deductMoneyFromSubAdminWallet = async (req, res) => {
+  try {
+    const { subAdminId, amount, description } = req.body;
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ message: "Only admin can deduct money from subadmin wallets" });
+    }
+
+    const subAdmin = await Admin.findById(subAdminId);
+    if (!subAdmin || subAdmin.role !== "subadmin") {
+      return res.status(404).json({ message: "Subadmin not found" });
+    }
+
+    // update balance
+    subAdmin.wallet.balance -= amount;
+    await subAdmin.save();
+
+    // save transaction
+    const transaction = await Transaction.create({
+      fromAdminId: req.user.userId,
+      adminId: subAdmin._id,
+      amount,
+      type: "debit",
+      description,
+      balanceAfter: subAdmin.wallet.balance,
+      category: "admin_wallet",
+    });
+
+    res.json({ message: "Money deducted successfully", wallet: subAdmin.wallet, transaction });
+  } catch (err) {
+    res.status(500).json({ message: "Error deducting money from subadmin wallet", error: err.message });
+  }
+};
+
+export const getSubAdminWalletTransactions = async (req, res) => {
+  try {
+    const { subAdminId } = req.params;
+
+    const subAdmin = await Admin.findById(subAdminId).select("name email role wallet");
+    if (!subAdmin || subAdmin.role !== "subadmin") {
+      return res.status(404).json({ message: "Subadmin not found" });
+    }
+
+    const transactions = await Transaction.find({ adminId: subAdminId })
+      .sort({ createdAt: -1 })
+      .populate("fromAdminId", "name email role");
+      
+    res.json({
+      subAdmin: { id: subAdmin._id, name: subAdmin.name, email: subAdmin.email, role: subAdmin.role },
+      transactions,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching subadmin wallet transactions", error: err.message });
+  }
+};
+
+
+

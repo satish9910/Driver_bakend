@@ -3,7 +3,6 @@ import jwt from "jsonwebtoken";
 import User from "../models/user.js";
 import Admin from "../models/adminModel.js";
 
-
 const userSignup = async (req, res) => {
   const { name, drivercode, email, mobile, password } = req.body;
   const profilePicture = req.file ? req.file.path : null; // if you're uploading file with multer
@@ -33,11 +32,9 @@ const userSignup = async (req, res) => {
     await user.save();
 
     // Generate JWT token
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
     res.status(201).json({
       message: "User registered successfully",
@@ -57,8 +54,6 @@ const userSignup = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
-
-
 
 const userLogin = async (req, res) => {
   const { emailOrMobile, password } = req.body;
@@ -86,7 +81,7 @@ const userLogin = async (req, res) => {
 
     // Create JWT token
     const token = jwt.sign(
-      { userId: user._id , role: user.role},
+      { userId: user._id, role: user.role },
       process.env.JWT_SECRET,
 
       { expiresIn: "7d" }
@@ -113,9 +108,6 @@ const userLogin = async (req, res) => {
   }
 };
 
-
-
-
 // Admin/Subadmin Registration
 const registerAdminOrSubadmin = async (req, res) => {
   const { name, email, password, role, permissions } = req.body;
@@ -141,7 +133,7 @@ const registerAdminOrSubadmin = async (req, res) => {
       email,
       password: hashedPassword,
       role,
-      permissions: role === "subadmin" ? permissions || [] : []
+      permissions: role === "subadmin" ? permissions || [] : [],
     });
 
     await newAdmin.save();
@@ -161,8 +153,8 @@ const registerAdminOrSubadmin = async (req, res) => {
         name: newAdmin.name,
         email: newAdmin.email,
         role: newAdmin.role,
-        permissions: newAdmin.permissions
-      }
+        permissions: newAdmin.permissions,
+      },
     });
   } catch (error) {
     console.error("Error registering admin/subadmin:", error);
@@ -202,8 +194,8 @@ const loginAdminOrSubadmin = async (req, res) => {
         name: admin.name,
         email: admin.email,
         role: admin.role,
-        permissions: admin.permissions
-      }
+        permissions: admin.permissions,
+      },
     });
   } catch (error) {
     console.error("Error logging in admin/subadmin:", error);
@@ -211,15 +203,11 @@ const loginAdminOrSubadmin = async (req, res) => {
   }
 };
 
-
-
-
-
 const publicController = {
   userSignup,
   userLogin,
   registerAdminOrSubadmin,
-  loginAdminOrSubadmin
+  loginAdminOrSubadmin,
 };
 
 export default publicController;
