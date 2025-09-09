@@ -13,9 +13,18 @@ const settlementSchema = new mongoose.Schema(
   {
     isSettled: { type: Boolean, default: false },
     settlementAmount: { type: Number, default: 0 },
+    calculatedAmount: { type: Number, default: 0 }, // Original calculation before adjustments
     adminAdjustments: { type: Number, default: 0 },
     notes: { type: String, default: "" },
     settledAt: { type: Date },
+    settledBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+    settledByRole: { type: String, enum: ["admin", "subadmin"] },
+    status: { type: String, enum: ["pending", "completed", "reversed"], default: "pending" },
+    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+    // Reversal fields
+    reversedAt: { type: Date },
+    reversedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+    reversalReason: { type: String }
   },
   { _id: false }
 );

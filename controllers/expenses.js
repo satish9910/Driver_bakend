@@ -11,6 +11,10 @@ const postExpenses = async (req, res) => {
     const data = req.body;
     const { bookingId } = data;
 
+    console.log("postExpenses data:", data);
+    console.log("bookingId:", bookingId);
+    console.log("userId:", userId);
+
     if (!bookingId) {
       return res.status(400).json({ message: "bookingId is required" });
     }

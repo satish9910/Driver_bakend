@@ -5,6 +5,11 @@ import { authentication } from "../middlewares/auth.js";
 import expensesController from "../controllers/expenses.js";
 import { getMyUserTransactions, getMyWalletDetails } from "../controllers/wallet.js";
 import { upsertReceiving, getReceivingByBooking } from "../controllers/receiving.js";
+import { 
+  getMySettlements, 
+  getBookingSettlementDetails, 
+  getSettlementTransactions 
+} from "../controllers/userSettlement.js";
 import upload from "../middlewares/multer.js";
 
 const router = express.Router();
@@ -32,9 +37,13 @@ router.post('/create-receiving', authentication, upsertReceiving);
 router.get('/receiving/:bookingId', authentication, getReceivingByBooking);
 
 // Wallet
-
 router.get("/my/wallet", authentication, getMyWalletDetails);
-router.get("/my/transactions", authentication, getMyUserTransactions);
+router.get("/my-transactions", authentication, getMyUserTransactions);
+
+// Settlement routes for drivers
+router.get("/my-settlements", authentication, getMySettlements);
+router.get("/booking-settlement/:bookingId", authentication, getBookingSettlementDetails);
+router.get("/settlement-transactions", authentication, getSettlementTransactions);
 
 
 export default router;

@@ -42,6 +42,17 @@ import {
   getSubAdminWalletTransactions,
 } from "../controllers/wallet.js";
 import { createLabel, getLabels, setBookingLabels } from "../controllers/label.js";
+import {
+  getSettlementPreview,
+  processBookingSettlement,
+  getDriverSettlements,
+  reverseSettlement,
+  getPendingSettlements
+} from "../controllers/settlement.js";
+import {
+  getSettlementDashboard,
+  getDriverSettlementAnalytics
+} from "../controllers/settlementDashboard.js";
 
 const upload = multer({ dest: "uploads/" });
 
@@ -84,6 +95,17 @@ router.post("/booking/:id/settle", authentication, settleBooking);
 // Admin/Subadmin self-owned expense/receiving upsert
 router.put('/update-expense-booking/:bookingId', authentication, upsertAdminExpense);
 router.put('/update-receiving-booking/:bookingId', authentication, upsertAdminReceiving);
+
+// Settlement routes
+router.get('/booking-settlement-preview/:bookingId', authentication, getSettlementPreview);
+router.post('/booking-settlement-settle/:bookingId', authentication, processBookingSettlement);
+router.post('/booking-settlement/:bookingId/reverse-settlement', authentication, reverseSettlement);
+router.get('/driver/:driverId/settlements', authentication, getDriverSettlements);
+router.get('/settlements/pending', authentication, getPendingSettlements);
+
+// Settlement dashboard routes
+router.get('/dashboard-settlements', authentication, getSettlementDashboard);
+router.get('/driver-settlement-analytics/:driverId', authentication, getDriverSettlementAnalytics);
 
 //wallet routes
 
