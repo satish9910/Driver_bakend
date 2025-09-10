@@ -317,10 +317,11 @@ const getAllBookingKeys = async (req, res) => {
     const keys = await Booking.distinct("data.key");
     res.status(200).json({ keys });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching keys", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching keys", error: error.message });
   }
 };
-
 
 const getAllBookings = async (req, res) => {
   try {
@@ -367,9 +368,9 @@ const getAllBookings = async (req, res) => {
     const bookings = await Booking.find(filter)
       .populate({ path: "driver", select: "-password" })
       .populate({ path: "expenses", model: "Expenses" })
-      .populate({ path: 'primaryExpense', model: 'Expenses' })
-      .populate({ path: 'receiving', model: 'Receiving' })
-      .populate({ path: 'labels', select: 'name color' })
+      .populate({ path: "primaryExpense", model: "Expenses" })
+      .populate({ path: "receiving", model: "Receiving" })
+      .populate({ path: "labels", select: "name color" })
       .sort({ createdAt: -1 });
 
     // ---- Handle selected keys ----
@@ -443,9 +444,9 @@ const filterBookings = async (req, res) => {
     const bookings = await Booking.find(filter)
       .populate({ path: "driver", select: "name drivercode" })
       .populate({ path: "expenses", model: "Expenses" })
-      .populate({ path: 'primaryExpense', model: 'Expenses' })
-      .populate({ path: 'receiving', model: 'Receiving' })
-      .populate({ path: 'labels', select: 'name color' })
+      .populate({ path: "primaryExpense", model: "Expenses" })
+      .populate({ path: "receiving", model: "Receiving" })
+      .populate({ path: "labels", select: "name color" })
       .sort({ createdAt: -1 });
 
     // ---- Filter keys from request ----
@@ -472,7 +473,13 @@ const filterBookings = async (req, res) => {
       };
     });
 
-    res.status(200).json({ success: true, count: filteredBookings.length, data: filteredBookings });
+    res
+      .status(200)
+      .json({
+        success: true,
+        count: filteredBookings.length,
+        data: filteredBookings,
+      });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -481,7 +488,6 @@ const filterBookings = async (req, res) => {
     });
   }
 };
-
 
 const assignDriver = async (req, res) => {
   try {
@@ -521,32 +527,50 @@ const getBookingDetail = async (req, res) => {
   try {
     const { id } = req.params;
     const booking = await Booking.findById(id)
-      .populate({ path: 'driver', select: 'name email mobile drivercode wallet' })
-      .populate({ path: 'expenses', model: 'Expenses' })
-      .populate({ path: 'primaryExpense', model: 'Expenses' })
-      .populate({ path: 'receiving', model: 'Receiving' })
-      .populate({ path: 'labels', model: 'Label' });
+      .populate({
+        path: "driver",
+        select: "name email mobile drivercode wallet",
+      })
+      .populate({ path: "primaryExpense", model: "Expenses" })
+      .populate({ path: "receiving", model: "Receiving" })
+      .populate({ path: "labels", model: "Label" });
 
-    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
 
     // New totals (use primaryExpense if present else first expense) paired with receiving
-    const primary = booking.primaryExpense || (booking.expenses && booking.expenses[0]);
+    const primary = booking.primaryExpense;
     let expenseTotals = null;
     let receivingTotals = null;
     let difference = null;
     if (primary) {
-      const billingSum = (primary.billingItems || []).reduce((s,i)=> s + (Number(i.amount)||0),0);
+      const billingSum = (primary.billingItems || []).reduce(
+        (s, i) => s + (Number(i.amount) || 0),
+        0
+      );
       const totalAllowances = primary.totalAllowances || 0;
       const totalExpense = billingSum + totalAllowances;
       expenseTotals = { billingSum, totalAllowances, totalExpense };
       if (booking.receiving) {
         const r = booking.receiving;
-        const receivingBillingSum = (r.billingItems || []).reduce((s,i)=> s + (Number(i.amount)||0),0);
+        const receivingBillingSum = (r.billingItems || []).reduce(
+          (s, i) => s + (Number(i.amount) || 0),
+          0
+        );
         const receivingAllowances = r.totalAllowances || 0;
         const receivedFromCompany = r.receivedFromCompany || 0;
         const receivedFromClient = r.receivedFromClient || 0;
-        const totalReceiving = receivingBillingSum + receivingAllowances + receivedFromCompany + receivedFromClient;
-        receivingTotals = { receivingBillingSum, receivingAllowances, receivedFromCompany, receivedFromClient, totalReceiving };
+        const totalReceiving =
+          receivingBillingSum +
+          receivingAllowances +
+          receivedFromCompany +
+          receivedFromClient;
+        receivingTotals = {
+          receivingBillingSum,
+          receivingAllowances,
+          receivedFromCompany,
+          receivedFromClient,
+          totalReceiving,
+        };
         difference = Number((totalExpense - totalReceiving).toFixed(2));
       }
     }
@@ -556,11 +580,13 @@ const getBookingDetail = async (req, res) => {
       totals: {
         expense: expenseTotals,
         receiving: receivingTotals,
-        difference
-      }
+        difference,
+      },
     });
   } catch (err) {
-    res.status(500).json({ message: 'Error fetching booking detail', error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching booking detail", error: err.message });
   }
 };
 
@@ -569,18 +595,21 @@ const updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body; // expect 0 or 1
-    if (![0,1].includes(status)) return res.status(400).json({ message: 'Invalid status' });
+    if (![0, 1].includes(status))
+      return res.status(400).json({ message: "Invalid status" });
 
     const booking = await Booking.findById(id);
-    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
 
     booking.status = status;
     if (status === 1) booking.completedAt = new Date();
     await booking.save();
 
-    res.json({ message: 'Status updated', booking });
+    res.json({ message: "Status updated", booking });
   } catch (err) {
-    res.status(500).json({ message: 'Error updating status', error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error updating status", error: err.message });
   }
 };
 
@@ -588,21 +617,32 @@ const updateBookingStatus = async (req, res) => {
 const settleBooking = async (req, res) => {
   try {
     const { id } = req.params;
-    const { settlementAmount, adminAdjustments = 0, notes = '', markComplete } = req.body;
+    const {
+      settlementAmount,
+      adminAdjustments = 0,
+      notes = "",
+      markComplete,
+    } = req.body;
 
-    const booking = await Booking.findById(id).populate({ path: 'expenses', model: 'Expenses' });
-    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    const booking = await Booking.findById(id).populate({
+      path: "expenses",
+      model: "Expenses",
+    });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
 
     let totalDriverExpense = 0;
     let totalAdvance = 0;
     if (booking.expenses && booking.expenses.length) {
-      booking.expenses.forEach(exp => {
-        totalDriverExpense += (exp.totalDriverExpense || 0);
-        totalAdvance += (exp.advanceAmount || 0) + (exp.advanceFromCompany || 0);
+      booking.expenses.forEach((exp) => {
+        totalDriverExpense += exp.totalDriverExpense || 0;
+        totalAdvance +=
+          (exp.advanceAmount || 0) + (exp.advanceFromCompany || 0);
       });
     }
-    const defaultSettlement = totalDriverExpense - totalAdvance + Number(adminAdjustments || 0);
-    const finalSettlement = settlementAmount != null ? Number(settlementAmount) : defaultSettlement;
+    const defaultSettlement =
+      totalDriverExpense - totalAdvance + Number(adminAdjustments || 0);
+    const finalSettlement =
+      settlementAmount != null ? Number(settlementAmount) : defaultSettlement;
 
     booking.settlement.isSettled = true;
     booking.settlement.settlementAmount = finalSettlement;
@@ -618,17 +658,19 @@ const settleBooking = async (req, res) => {
     await booking.save();
 
     res.json({
-      message: 'Booking settled',
+      message: "Booking settled",
       booking,
       computed: {
         totalDriverExpense,
         totalAdvance,
         defaultSettlement,
         finalSettlement,
-      }
+      },
     });
   } catch (err) {
-    res.status(500).json({ message: 'Error settling booking', error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error settling booking", error: err.message });
   }
 };
 
@@ -636,14 +678,19 @@ const settleBooking = async (req, res) => {
 const upsertAdminExpense = async (req, res) => {
   try {
     const role = req.user?.role;
-    if (!['admin','subadmin'].includes(role)) return res.status(403).json({ message: 'Forbidden' });
+    if (!["admin", "subadmin"].includes(role))
+      return res.status(403).json({ message: "Forbidden" });
 
     const bookingId = req.params.bookingId || req.body.bookingId;
-    if (!bookingId) return res.status(400).json({ message: 'bookingId required' });
+    if (!bookingId)
+      return res.status(400).json({ message: "bookingId required" });
 
     const booking = await Booking.findById(bookingId);
-    if (!booking) return res.status(404).json({ message: 'Booking not found' });
-    if (!booking.driver) return res.status(400).json({ message: 'Booking has no driver assigned' });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (!booking.driver)
+      return res
+        .status(400)
+        .json({ message: "Booking has no driver assigned" });
     const userId = booking.driver; // driver user id
 
     let expense = await Expenses.findOne({ bookingId, userId });
@@ -651,8 +698,15 @@ const upsertAdminExpense = async (req, res) => {
     if (!expense) expense = new Expenses({ bookingId, userId });
 
     // Ownership checks (only original creating admin/subadmin can edit)
-    if (expense.createdByAdmin && expense.createdByAdmin.toString() !== req.user.userId) {
-      return res.status(403).json({ message: 'Only creating admin/subadmin can edit this expense' });
+    if (
+      expense.createdByAdmin &&
+      expense.createdByAdmin.toString() !== req.user.userId
+    ) {
+      return res
+        .status(403)
+        .json({
+          message: "Only creating admin/subadmin can edit this expense",
+        });
     }
     if (!expense.createdByAdmin) {
       expense.createdByAdmin = req.user.userId;
@@ -660,56 +714,85 @@ const upsertAdminExpense = async (req, res) => {
     }
 
     const b = req.body || {};
-    const parseNum = v => (v === '' || v == null) ? undefined : (Number(v) || 0);
-    const setIf = (field, transform = v=>v) => { if (b[field] != null) expense[field] = transform(b[field]); };
+    const parseNum = (v) =>
+      v === "" || v == null ? undefined : Number(v) || 0;
+    const setIf = (field, transform = (v) => v) => {
+      if (b[field] != null) expense[field] = transform(b[field]);
+    };
 
     // Duty fields
-    ['dutyStartDate','dutyEndDate'].forEach(f=> setIf(f, v=> new Date(v)));
-    ['dutyStartTime','dutyEndTime','dutyType','notes'].forEach(f=> setIf(f));
-    ['dutyStartKm','dutyEndKm'].forEach(f=> setIf(f, v=> Number(v)||0));
+    ["dutyStartDate", "dutyEndDate"].forEach((f) =>
+      setIf(f, (v) => new Date(v))
+    );
+    ["dutyStartTime", "dutyEndTime", "dutyType", "notes"].forEach((f) =>
+      setIf(f)
+    );
+    ["dutyStartKm", "dutyEndKm"].forEach((f) =>
+      setIf(f, (v) => Number(v) || 0)
+    );
 
     // Allowances
     const allowanceFields = [
-      'dailyAllowance','outstationAllowance','earlyStartAllowance','nightAllowance',
-      'overTime','sundayAllowance','outstationOvernightAllowance','extraDutyAllowance'
+      "dailyAllowance",
+      "outstationAllowance",
+      "earlyStartAllowance",
+      "nightAllowance",
+      "overTime",
+      "sundayAllowance",
+      "outstationOvernightAllowance",
+      "extraDutyAllowance",
     ];
-    allowanceFields.forEach(f=> { const n = parseNum(b[f]); if (n !== undefined) expense[f] = n; });
+    allowanceFields.forEach((f) => {
+      const n = parseNum(b[f]);
+      if (n !== undefined) expense[f] = n;
+    });
 
     // billingItems (accept JSON string / array)
     if (b.billingItems != null) {
       let items = b.billingItems;
-      if (typeof items === 'string') {
-        try { items = JSON.parse(items); } catch { return res.status(400).json({ message: 'billingItems invalid JSON' }); }
+      if (typeof items === "string") {
+        try {
+          items = JSON.parse(items);
+        } catch {
+          return res.status(400).json({ message: "billingItems invalid JSON" });
+        }
       }
-      if (!Array.isArray(items)) return res.status(400).json({ message: 'billingItems must be array' });
+      if (!Array.isArray(items))
+        return res.status(400).json({ message: "billingItems must be array" });
 
       // If files uploaded (form-data style) attach images: fields like billingItems[0].image
       if (req.files) {
         for (const field in req.files) {
           const filesArr = req.files[field];
-            filesArr.forEach(f => {
-              const m = field.match(/^billingItems\[(\d+)\]\.image$/);
-              if (m) {
-                const idx = parseInt(m[1]);
-                if (items[idx]) items[idx].image = f.path;
-              }
-            });
+          filesArr.forEach((f) => {
+            const m = field.match(/^billingItems\[(\d+)\]\.image$/);
+            if (m) {
+              const idx = parseInt(m[1]);
+              if (items[idx]) items[idx].image = f.path;
+            }
+          });
         }
       }
 
       expense.billingItems = items
-        .filter(i=> i && i.category && i.amount != null)
-        .map(i=> ({
+        .filter((i) => i && i.category && i.amount != null)
+        .map((i) => ({
           category: i.category,
-          amount: Number(i.amount)||0,
+          amount: Number(i.amount) || 0,
           image: i.image || null,
-          note: i.note || ''
+          note: i.note || "",
         }));
     }
 
     // Recompute totals
-    const billingSum = (expense.billingItems || []).reduce((s,i)=> s + (Number(i.amount)||0), 0);
-    const totalAllowances = allowanceFields.reduce((s,f)=> s + (Number(expense[f])||0), 0);
+    const billingSum = (expense.billingItems || []).reduce(
+      (s, i) => s + (Number(i.amount) || 0),
+      0
+    );
+    const totalAllowances = allowanceFields.reduce(
+      (s, f) => s + (Number(expense[f]) || 0),
+      0
+    );
     expense.totalAllowances = totalAllowances;
     expense.totalDriverExpense = billingSum + totalAllowances;
 
@@ -719,7 +802,11 @@ const upsertAdminExpense = async (req, res) => {
 
     // Link into booking
     booking.expenses = booking.expenses || [];
-    if (!booking.expenses.map(e=> e.toString()).includes(expense._id.toString())) {
+    if (
+      !booking.expenses
+        .map((e) => e.toString())
+        .includes(expense._id.toString())
+    ) {
       booking.expenses.push(expense._id);
     }
     booking.primaryExpense = expense._id;
@@ -731,7 +818,10 @@ const upsertAdminExpense = async (req, res) => {
       const receiving = await Receiving.findOne({ bookingId, userId });
       if (receiving) {
         const expenseBillingSum = billingSum;
-        const receivingBillingSum = (receiving.billingItems || []).reduce((s,i)=> s + (Number(i.amount)||0), 0);
+        const receivingBillingSum = (receiving.billingItems || []).reduce(
+          (s, i) => s + (Number(i.amount) || 0),
+          0
+        );
 
         const totalExpense = expenseBillingSum + (expense.totalAllowances || 0);
         const totalReceiving =
@@ -743,11 +833,17 @@ const upsertAdminExpense = async (req, res) => {
         const difference = Number((totalExpense - totalReceiving).toFixed(2));
 
         if (difference === 0) {
-          reconciliation = { action: 'none', difference: 0 };
+          reconciliation = { action: "none", difference: 0 };
         } else {
           // Lazy load Transaction model (to avoid needing top-level import change)
-            let Transaction = null;
-            try { ({ default: Transaction } = await import('../models/Transaction.js')); } catch { /* ignore */ }
+          let Transaction = null;
+          try {
+            ({ default: Transaction } = await import(
+              "../models/Transaction.js"
+            ));
+          } catch {
+            /* ignore */
+          }
 
           const user = await User.findById(userId);
           if (user) {
@@ -761,14 +857,18 @@ const upsertAdminExpense = async (req, res) => {
                 txn = await Transaction.create({
                   userId: user._id,
                   amount: difference,
-                  type: 'credit',
+                  type: "credit",
                   description: `Auto reconciliation (admin) for booking ${bookingId}`,
                   balanceAfter: user.wallet.balance,
-                  category: 'user_wallet',
-                  meta: { performedBy: req.user.userId, role }
+                  category: "user_wallet",
+                  meta: { performedBy: req.user.userId, role },
                 });
               }
-              reconciliation = { action: 'credit', difference, transactionId: txn?._id || null };
+              reconciliation = {
+                action: "credit",
+                difference,
+                transactionId: txn?._id || null,
+              };
             } else {
               const debitAmt = Math.abs(difference);
               if (user.wallet.balance >= debitAmt) {
@@ -778,70 +878,87 @@ const upsertAdminExpense = async (req, res) => {
                   txn = await Transaction.create({
                     userId: user._id,
                     amount: debitAmt,
-                    type: 'debit',
+                    type: "debit",
                     description: `Auto reconciliation (admin) for booking ${bookingId}`,
                     balanceAfter: user.wallet.balance,
-                    category: 'user_wallet',
-                    meta: { performedBy: req.user.userId, role }
+                    category: "user_wallet",
+                    meta: { performedBy: req.user.userId, role },
                   });
                 }
-                reconciliation = { action: 'debit', difference, transactionId: txn?._id || null };
+                reconciliation = {
+                  action: "debit",
+                  difference,
+                  transactionId: txn?._id || null,
+                };
               } else {
-                reconciliation = { action: 'debit_pending', difference, reason: 'Insufficient wallet balance' };
+                reconciliation = {
+                  action: "debit_pending",
+                  difference,
+                  reason: "Insufficient wallet balance",
+                };
               }
             }
           }
         }
       }
     } catch (reconErr) {
-      console.error('Reconciliation error:', reconErr);
-      reconciliation = { action: 'error', reason: reconErr.message };
+      console.error("Reconciliation error:", reconErr);
+      reconciliation = { action: "error", reason: reconErr.message };
     }
 
-    const totalDistance = (expense.dutyStartKm != null && expense.dutyEndKm != null)
-      ? (expense.dutyEndKm - expense.dutyStartKm)
-      : null;
+    const totalDistance =
+      expense.dutyStartKm != null && expense.dutyEndKm != null
+        ? expense.dutyEndKm - expense.dutyStartKm
+        : null;
 
     res.json({
-      message: creating ? 'Expense created' : 'Expense updated',
+      message: creating ? "Expense created" : "Expense updated",
       owned: true,
       expense,
       totals: {
         billingSum,
         totalAllowances,
         totalDriverExpense: expense.totalDriverExpense,
-        totalDistance
+        totalDistance,
       },
-      reconciliation
+      reconciliation,
     });
   } catch (err) {
-    console.error('upsertAdminExpense error:', err);
-    res.status(500).json({ message: 'Server error', error: err.message });
+    console.error("upsertAdminExpense error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 };
-
-
-
-
 
 // Admin/Subadmin create or edit a RECEIVING they own (claim if unowned)
 const upsertAdminReceiving = async (req, res) => {
   try {
     const role = req.user?.role;
-    if (!['admin','subadmin'].includes(role)) return res.status(403).json({ message: 'Forbidden' });
+    if (!["admin", "subadmin"].includes(role))
+      return res.status(403).json({ message: "Forbidden" });
     const bookingId = req.params.bookingId || req.body.bookingId;
-    if (!bookingId) return res.status(400).json({ message: 'bookingId required' });
+    if (!bookingId)
+      return res.status(400).json({ message: "bookingId required" });
     const booking = await Booking.findById(bookingId);
-    if (!booking) return res.status(404).json({ message: 'Booking not found' });
-    if (!booking.driver) return res.status(400).json({ message: 'Booking has no driver assigned' });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (!booking.driver)
+      return res
+        .status(400)
+        .json({ message: "Booking has no driver assigned" });
     const userId = booking.driver;
 
     let receiving = await Receiving.findOne({ bookingId, userId });
     const creating = !receiving;
     if (!receiving) receiving = new Receiving({ bookingId, userId });
 
-    if (receiving.createdByAdmin && receiving.createdByAdmin.toString() !== req.user.userId) {
-      return res.status(403).json({ message: 'Only creating admin/subadmin can edit this receiving' });
+    if (
+      receiving.createdByAdmin &&
+      receiving.createdByAdmin.toString() !== req.user.userId
+    ) {
+      return res
+        .status(403)
+        .json({
+          message: "Only creating admin/subadmin can edit this receiving",
+        });
     }
     if (!receiving.createdByAdmin) {
       receiving.createdByAdmin = req.user.userId;
@@ -849,25 +966,56 @@ const upsertAdminReceiving = async (req, res) => {
     }
 
     const b = req.body || {};
-    const parseNum = v => (v === '' || v == null) ? undefined : (Number(v) || 0);
-    const setIf = (f, transform = v=>v) => { if (b[f] != null) receiving[f] = transform(b[f]); };
-    ['dutyStartDate','dutyEndDate'].forEach(f=> setIf(f, v=> new Date(v)));
-    ['dutyStartTime','dutyEndTime','dutyType','notes'].forEach(f=> setIf(f));
-    ['dutyStartKm','dutyEndKm'].forEach(f=> setIf(f, v=> Number(v)||0));
+    const parseNum = (v) =>
+      v === "" || v == null ? undefined : Number(v) || 0;
+    const setIf = (f, transform = (v) => v) => {
+      if (b[f] != null) receiving[f] = transform(b[f]);
+    };
+    ["dutyStartDate", "dutyEndDate"].forEach((f) =>
+      setIf(f, (v) => new Date(v))
+    );
+    ["dutyStartTime", "dutyEndTime", "dutyType", "notes"].forEach((f) =>
+      setIf(f)
+    );
+    ["dutyStartKm", "dutyEndKm"].forEach((f) =>
+      setIf(f, (v) => Number(v) || 0)
+    );
     // Allowances + received
-    ['dailyAllowance','outstationAllowance','earlyStartAllowance','nightAllowance','receivedFromCompany','receivedFromClient','overTime','sundayAllowance','outstationOvernightAllowance','extraDutyAllowance']
-      .forEach(f=> { const n = parseNum(b[f]); if (n !== undefined) receiving[f] = n; });
+    [
+      "dailyAllowance",
+      "outstationAllowance",
+      "earlyStartAllowance",
+      "nightAllowance",
+      "receivedFromCompany",
+      "receivedFromClient",
+      "overTime",
+      "sundayAllowance",
+      "outstationOvernightAllowance",
+      "extraDutyAllowance",
+    ].forEach((f) => {
+      const n = parseNum(b[f]);
+      if (n !== undefined) receiving[f] = n;
+    });
 
     if (b.billingItems != null) {
       let items = b.billingItems;
-      if (typeof items === 'string') { try { items = JSON.parse(items); } catch { return res.status(400).json({ message: 'billingItems invalid JSON' }); } }
-      if (!Array.isArray(items)) return res.status(400).json({ message: 'billingItems must be array' });
-      receiving.billingItems = items.filter(i=> i && i.category && i.amount != null).map(i=> ({
-        category: i.category,
-        amount: Number(i.amount)||0,
-        image: i.image || null,
-        note: i.note || ''
-      }));
+      if (typeof items === "string") {
+        try {
+          items = JSON.parse(items);
+        } catch {
+          return res.status(400).json({ message: "billingItems invalid JSON" });
+        }
+      }
+      if (!Array.isArray(items))
+        return res.status(400).json({ message: "billingItems must be array" });
+      receiving.billingItems = items
+        .filter((i) => i && i.category && i.amount != null)
+        .map((i) => ({
+          category: i.category,
+          amount: Number(i.amount) || 0,
+          image: i.image || null,
+          note: i.note || "",
+        }));
     }
 
     // Recompute totalAllowances (exclude receivedFromCompany/Client)
@@ -879,19 +1027,26 @@ const upsertAdminReceiving = async (req, res) => {
       receiving.overTime,
       receiving.sundayAllowance,
       receiving.outstationOvernightAllowance,
-      receiving.extraDutyAllowance
-    ].reduce((s,v)=> s + (Number(v)||0), 0);
+      receiving.extraDutyAllowance,
+    ].reduce((s, v) => s + (Number(v) || 0), 0);
 
     receiving.lastEditedByAdmin = req.user.userId;
     receiving.lastEditedAt = new Date();
     await receiving.save();
 
-    if (!booking.receiving) { booking.receiving = receiving._id; await booking.save(); }
+    if (!booking.receiving) {
+      booking.receiving = receiving._id;
+      await booking.save();
+    }
 
-    res.json({ message: creating ? 'Receiving created' : 'Receiving updated', owned: true, receiving });
+    res.json({
+      message: creating ? "Receiving created" : "Receiving updated",
+      owned: true,
+      receiving,
+    });
   } catch (err) {
-    console.error('upsertAdminReceiving error:', err);
-    res.status(500).json({ message: 'Server error', error: err.message });
+    console.error("upsertAdminReceiving error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 };
 
@@ -911,49 +1066,48 @@ const getDriverBookingById = async (req, res) => {
         options: { sort: { createdAt: -1 } },
         populate: [
           { path: "primaryExpense", model: "Expenses" },
-            // include all individual expenses if needed
+          // include all individual expenses if needed
           { path: "expenses", model: "Expenses" },
           { path: "receiving", model: "Receiving" },
           { path: "labels", select: "name color" },
-          { path: "driver", select: "name drivercode" }
-        ]
+          { path: "driver", select: "name drivercode" },
+        ],
       });
 
     if (!driver) {
       return res.status(404).json({ message: "Driver not found" });
     }
 
-    const bookings = driver.bookings.map(b => ({
+    const bookings = driver.bookings.map((b) => ({
       _id: b._id,
       status: b.status,
       data: b.data,
       primaryExpense: b.primaryExpense || null,
       receiving: b.receiving || null,
-      expenses: b.expenses || [],
+      // expenses: b.expenses || [],
       labels: b.labels || [],
       createdAt: b.createdAt,
-      updatedAt: b.updatedAt
+      updatedAt: b.updatedAt,
     }));
 
     res.status(200).json({
       success: true,
-      driver: { _id: driver._id, name: driver.name, drivercode: driver.drivercode },
+      driver: {
+        _id: driver._id,
+        name: driver.name,
+        drivercode: driver.drivercode,
+      },
       count: bookings.length,
-      bookings
+      bookings,
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: "Error fetching driver bookings",
-      error: error.message
+      error: error.message,
     });
   }
 };
-
-
-
-
-
 
 export {
   getAllDrivers,
@@ -973,5 +1127,5 @@ export {
   filterBookings,
   getDriverBookingById,
   upsertAdminExpense,
-  upsertAdminReceiving
+  upsertAdminReceiving,
 };

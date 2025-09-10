@@ -3,8 +3,6 @@ import Receiving from '../models/receiving.js';
 import Booking from '../models/Booking.js';
 import mongoose from 'mongoose';
 import Expenses from '../models/expenses.js';
-import User from '../models/user.js';
-import Transaction from '../models/transectionModel.js';
 
 const numericAllowanceFields = [
     'dailyAllowance',
@@ -140,52 +138,14 @@ export const upsertReceiving = async (req, res) => {
         const receivingBillingSum = (receiving.billingItems || []).reduce((s,i)=> s + (i.amount||0),0);
         const totalReceiving = receivingBillingSum + (receiving.totalAllowances||0) + (receiving.receivedFromCompany||0) + (receiving.receivedFromClient||0);
 
-        // If expense exists perform reconciliation credit/debit (full diff approach)
+        // Compute difference with expense for info only (no wallet movement here)
         let reconciliation = null;
         const expense = await Expenses.findOne({ userId, bookingId });
         if (expense) {
             const expenseBillingSum = (expense.billingItems || []).reduce((s,i)=> s + (i.amount||0),0);
             const totalExpense = expenseBillingSum + (expense.totalAllowances||0);
             const difference = Number((totalExpense - totalReceiving).toFixed(2));
-            if (difference !== 0) {
-                const user = await User.findById(userId);
-                if (user) {
-                    if (!user.wallet) user.wallet = { balance: 0 };
-                    let txn = null;
-                    if (difference > 0) {
-                        user.wallet.balance += difference;
-                        await user.save();
-                        txn = await Transaction.create({
-                            userId: user._id,
-                            amount: difference,
-                            type: 'credit',
-                            description: `Auto reconciliation credit (receiving update) booking ${bookingId}`,
-                            balanceAfter: user.wallet.balance,
-                            category: 'user_wallet'
-                        });
-                        reconciliation = { action: 'credit', difference, transactionId: txn._id };
-                    } else {
-                        const debitAmt = Math.abs(difference);
-                        if (user.wallet.balance >= debitAmt) {
-                            user.wallet.balance -= debitAmt;
-                            await user.save();
-                            txn = await Transaction.create({
-                                userId: user._id,
-                                amount: debitAmt,
-                                type: 'debit',
-                                description: `Auto reconciliation debit (receiving update) booking ${bookingId}`,
-                                balanceAfter: user.wallet.balance,
-                                category: 'user_wallet'
-                            });
-                            reconciliation = { action: 'debit', difference, transactionId: txn._id };
-                        } else {
-                            reconciliation = { action: 'debit_pending', difference, reason: 'Insufficient wallet balance' };
-                        }
-                    }
-                }
-            } else {
-                reconciliation = { action: 'none', difference: 0 };
-            }
+            reconciliation = { action: 'none', difference };
         }
 
         res.json({ message: 'Receiving saved', receiving, totals: { receivingBillingSum, receivingAllowances: receiving.totalAllowances || 0, receivedFromCompany: receiving.receivedFromCompany||0, receivedFromClient: receiving.receivedFromClient||0, totalReceiving }, reconciliation });

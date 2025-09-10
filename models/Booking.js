@@ -21,7 +21,14 @@ const settlementSchema = new mongoose.Schema(
     settledByRole: { type: String, enum: ["admin", "subadmin"] },
     status: { type: String, enum: ["pending", "completed", "reversed"], default: "pending" },
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
-    // Reversal fields
+  adminTransactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+  adjustAdminWallet: { type: Boolean, default: false },
+    action: { type: String, enum: [
+      'driver_debit_admin_credit',
+      'driver_credit_admin_debit',
+      'none',
+      'reversed'
+    ], default: 'none' },
     reversedAt: { type: Date },
     reversedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
     reversalReason: { type: String }
@@ -38,7 +45,7 @@ const bookingSchema = new mongoose.Schema(
     primaryExpense: { type: mongoose.Schema.Types.ObjectId, ref: "Expenses" },
     receiving: { type: mongoose.Schema.Types.ObjectId, ref: "Receiving" },
     labels: [{ type: mongoose.Schema.Types.ObjectId, ref: "Label" }],
-    status: { type: Number, default: 0 }, // 0 = open, 1 = completed
+    status: { type: Number, default: 0 }, 
     settlement: { type: settlementSchema, default: () => ({}) },
     completedAt: { type: Date },
   },

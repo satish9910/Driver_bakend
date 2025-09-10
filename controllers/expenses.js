@@ -152,91 +152,7 @@ const postExpenses = async (req, res) => {
       expense.dutyStartKm != null && expense.dutyEndKm != null
         ? expense.dutyEndKm - expense.dutyStartKm
         : null;
-  const totalExpense = billingSum + (expense.totalAllowances || 0);
-
-    // Attempt automatic reconciliation only if a receiving exists for this booking/user
-    let reconciliation = null;
-    const receiving = await Receiving.findOne({ bookingId, userId });
-    let totalReceivingSummary = null;
-    if (receiving) {
-      const expenseBillingSum = billingSum; // already computed
-      const receivingBillingSum = (receiving.billingItems || []).reduce(
-        (s, i) => s + (i.amount || 0),
-        0
-      );
-      const totalExpense = expenseBillingSum + (expense.totalAllowances || 0);
-      const totalReceiving =
-        receivingBillingSum +
-        (receiving.totalAllowances || 0) +
-        (receiving.receivedFromCompany || 0) +
-        (receiving.receivedFromClient || 0);
-      totalReceivingSummary = {
-        receivingBillingSum,
-        receivingAllowances: receiving.totalAllowances || 0,
-        receivedFromCompany: receiving.receivedFromCompany || 0,
-        receivedFromClient: receiving.receivedFromClient || 0,
-        totalReceiving,
-      };
-
-      const difference = Number((totalExpense - totalReceiving).toFixed(2));
-
-      // Adjust wallet if difference non-zero
-
-      if (difference !== 0) {
-        const user = await User.findById(userId);
-        if (user) {
-          if (!user.wallet) user.wallet = { balance: 0 };
-          let txn = null;
-          if (difference > 0) {
-            // credit
-            user.wallet.balance += difference;
-            await user.save();
-            txn = await Transaction.create({
-              userId: user._id,
-              amount: difference,
-              type: "credit",
-              description: `Auto reconciliation credit for booking ${bookingId}`,
-              balanceAfter: user.wallet.balance,
-              category: "user_wallet",
-            });
-            reconciliation = {
-              action: "credit",
-              difference,
-              transactionId: txn._id,
-            };
-          } else {
-            // difference < 0 => debit attempt
-
-            const debitAmt = Math.abs(difference);
-            if (user.wallet.balance >= debitAmt) {
-              user.wallet.balance -= debitAmt;
-              await user.save();
-              txn = await Transaction.create({
-                userId: user._id,
-                amount: debitAmt,
-                type: "debit",
-                description: `Auto reconciliation debit for booking ${bookingId}`,
-                balanceAfter: user.wallet.balance,
-                category: "user_wallet",
-              });
-              reconciliation = {
-                action: "debit",
-                difference,
-                transactionId: txn._id,
-              };
-            } else {
-              reconciliation = {
-                action: "debit_pending",
-                difference,
-                reason: "Insufficient wallet balance",
-              };
-            }
-          }
-        }
-      } else {
-        reconciliation = { action: "none", difference: 0 };
-      }
-    }
+    const totalExpense = billingSum + (expense.totalAllowances || 0);
 
     res.json({
       message: creating ? "Expenses created" : "Expenses updated",
@@ -244,11 +160,9 @@ const postExpenses = async (req, res) => {
       totals: {
         billingSum,
         totalAllowances: expense.totalAllowances,
-  totalExpense,
-  totalReceiving: totalReceivingSummary,
+        totalExpense,
         totalDistance,
       },
-      reconciliation,
     });
   } catch (err) {
     console.error("Error upserting expenses:", err);
