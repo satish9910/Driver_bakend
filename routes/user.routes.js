@@ -30,6 +30,7 @@ router.post(
 	]),
 	expensesController.postExpenses
 );
+router.get("/get-driver-profile", authentication, userController.getdriverprofile);
 router.get("/get-expenses", authentication, expensesController.getExpenses);
 router.get("/get-expenses-by-booking/:bookingId", authentication, expensesController.getExpensesByBookingId);
 // Receiving
