@@ -40,19 +40,12 @@ const calculateSettlementAmounts = (booking) => {
       (s, i) => s + (Number(i.amount) || 0),
       0
     );
-    const receivingAllowances = r.totalAllowances || 0;
-    const receivedFromCompany = r.receivedFromCompany || 0;
-    const receivedFromClient = r.receivedFromClient || 0;
-    receivingTotal =
-      receivingBillingSum +
-      receivingAllowances +
-      receivedFromCompany +
-      receivedFromClient;
+    const receivingAmount = r.totalReceivingAmount || 0;
+    receivingTotal = receivingBillingSum + receivingAmount;
     receivingBreakdown = {
       billingSum: receivingBillingSum,
-      allowancesSum: receivingAllowances,
-      receivedFromCompany,
-      receivedFromClient,
+      allowancesSum: r.totalAllowances || 0,
+      receivingAmount: receivingAmount,
       totalReceiving: receivingTotal,
     };
   }
@@ -115,15 +108,34 @@ export const getSettlementPreview = async (req, res) => {
       calculation,
       preview: {
         currentWalletBalance: booking.driver.wallet?.balance || 0,
+        settlementAmount: calculation.settlementAmount,
+        projectedWalletBalance: (booking.driver.wallet?.balance || 0) + calculation.settlementAmount,
         settlementAction:
           calculation.settlementAmount > 0
-            ? "debit"
-            : calculation.settlementAmount < 0
             ? "credit"
+            : calculation.settlementAmount < 0
+            ? "debit"
             : "none",
         settlementAbsAmount: Math.abs(calculation.settlementAmount),
-        projectedWalletBalance:
-          (booking.driver.wallet?.balance || 0) - calculation.settlementAmount,
+        adminWalletNote: "Admin wallet will NOT be automatically affected during settlement",
+        manualTransferRequired: calculation.settlementAmount > 0,
+        balanceExplanation: {
+          current: (booking.driver.wallet?.balance || 0) < 0 
+            ? `Driver currently owes company ₹${Math.abs(booking.driver.wallet?.balance || 0)}` 
+            : (booking.driver.wallet?.balance || 0) > 0 
+            ? `Company currently owes driver ₹${booking.driver.wallet?.balance || 0}` 
+            : "Account is currently balanced",
+          afterSettlement: ((booking.driver.wallet?.balance || 0) + calculation.settlementAmount) < 0 
+            ? `After settlement, driver will owe company ₹${Math.abs((booking.driver.wallet?.balance || 0) + calculation.settlementAmount)}` 
+            : ((booking.driver.wallet?.balance || 0) + calculation.settlementAmount) > 0 
+            ? `After settlement, company will owe driver ₹${(booking.driver.wallet?.balance || 0) + calculation.settlementAmount} - Manual admin transfer needed` 
+            : "After settlement, account will be balanced",
+          settlementDescription: calculation.settlementAmount > 0
+            ? `Driver spent ₹${calculation.settlementAmount} more than received - company owes driver (manual transfer required)`
+            : calculation.settlementAmount < 0
+            ? `Driver received ₹${Math.abs(calculation.settlementAmount)} more than spent - driver owes company`
+            : "Expenses and receiving are balanced"
+        },
       },
     });
   } catch (error) {
@@ -204,77 +216,68 @@ export const processBookingSettlement = async (req, res) => {
         ? Number(adjustmentAmount || 0)
         : Number(calc.settlementAmount || 0)) + Number(adminAdjustments || 0);
 
-    // Process adjustment amount
+    // Process settlement amount with reversed wallet logic
     if (finalAmount !== 0) {
+      // In reversed wallet system:
+      // - Current balance shows existing debt/credit
+      // - Settlement amount shows additional debt/credit needed
+      // - Final balance = current balance + settlement amount
+      // - ONLY update driver wallet, NOT admin wallet automatically
+      
+      const prevBalance = driver.wallet.balance;
+      driver.wallet.balance += finalAmount; // Add settlement amount to current balance
+      const newBalance = driver.wallet.balance;
+      
+      // Determine action based on settlement amount
       if (finalAmount > 0) {
-        // Positive: Add to driver wallet, deduct from admin wallet
-        driver.wallet.balance += finalAmount;
-        performingAdmin.wallet.balance -= finalAmount;
+        // Positive settlement: Driver spent more than received (company owes driver more)
+        settlementAction = "driver_credit_admin_debit"; // Using valid enum value
+        
+        // DO NOT automatically deduct from admin wallet
+        // Admin will manually transfer money when they have sufficient balance
 
-        settlementAction = "driver_credit_admin_debit";
-
-        // Create driver transaction
+        // Create driver transaction only
         driverTransaction = await Transaction.create({
           userId: driver._id,
           fromAdminId: adminId,
           amount: finalAmount,
           type: "credit",
-          description: `Settlement credit (+${finalAmount}) for booking ${bookingId} by ${
+          description: `Settlement: Company owes driver ₹${finalAmount} for booking ${bookingId} by ${
             performingAdmin.name
-          } (${role}) ${notes ? `- ${notes}` : ""}`,
-          balanceAfter: driver.wallet.balance,
+          } (${role}) ${notes ? `- ${notes}` : ""} - Manual admin transfer required`,
+          balanceAfter: newBalance,
           category: "user_wallet",
         });
 
-        // Create admin transaction
-        adminTransaction = await Transaction.create({
-          fromAdminId: adminId,
-          adminId: performingAdmin._id,
-          amount: finalAmount,
-          type: "debit",
-          description: `Settlement adjustment payout for booking ${bookingId} ${
-            notes ? `- ${notes}` : ""
-          }`,
-          balanceAfter: performingAdmin.wallet.balance,
-          category: "admin_wallet",
-        });
+        // No admin transaction created automatically
+        adminTransaction = null;
       } else {
-        // Negative: Deduct from driver wallet, add to admin wallet
-        const deductAmount = Math.abs(finalAmount);
-        driver.wallet.balance -= deductAmount;
-        performingAdmin.wallet.balance += deductAmount;
+        // Negative settlement: Driver received more than spent (driver owes company more)
+        const debitAmount = Math.abs(finalAmount);
+        settlementAction = "driver_debit_admin_credit"; // Using valid enum value
+        
+        // DO NOT automatically credit admin wallet
+        // This represents additional debt from driver to company
 
-        settlementAction = "driver_debit_admin_credit";
-
-        // Create driver transaction
+        // Create driver transaction only
         driverTransaction = await Transaction.create({
           userId: driver._id,
           fromAdminId: adminId,
-          amount: deductAmount,
+          amount: debitAmount,
           type: "debit",
-          description: `Settlement debit (-${deductAmount}) for booking ${bookingId} by ${
+          description: `Settlement: Driver owes company ₹${debitAmount} for booking ${bookingId} by ${
             performingAdmin.name
-          } (${role}) ${notes ? `- ${notes}` : ""}`,
-          balanceAfter: driver.wallet.balance,
+          } (${role}) ${notes ? `- ${notes}` : ""} - Driver debt increased`,
+          balanceAfter: newBalance,
           category: "user_wallet",
         });
 
-        // Create admin transaction
-        adminTransaction = await Transaction.create({
-          fromAdminId: adminId,
-          adminId: performingAdmin._id,
-          amount: deductAmount,
-          type: "credit",
-          description: `Settlement adjustment receipt for booking ${bookingId} ${
-            notes ? `- ${notes}` : ""
-          }`,
-          balanceAfter: performingAdmin.wallet.balance,
-          category: "admin_wallet",
-        });
+        // No admin transaction created automatically
+        adminTransaction = null;
       }
 
       await driver.save();
-      await performingAdmin.save();
+      // Do NOT save admin wallet changes during settlement
     }
 
     // Update booking settlement
@@ -303,13 +306,14 @@ export const processBookingSettlement = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Settlement processed successfully",
+      message: "Settlement processed successfully - Driver wallet updated",
       settlement: {
         amount: finalAmount,
         calculated: calc.settlementAmount,
         adminAdjustments: Number(adminAdjustments || 0),
         action: settlementAction,
         adjustedBy: `${performingAdmin.name} (${role})`,
+        note: "Admin wallet not automatically affected - manual transfer required if company owes driver"
       },
       calculation: calc,
       transactions: {
@@ -322,26 +326,25 @@ export const processBookingSettlement = async (req, res) => {
               description: driverTransaction.description,
             }
           : null,
-        admin: adminTransaction
-          ? {
-              _id: adminTransaction._id,
-              amount: adminTransaction.amount,
-              type: adminTransaction.type,
-              balanceAfter: adminTransaction.balanceAfter,
-              description: adminTransaction.description,
-            }
-          : null,
+        admin: null, // No automatic admin transaction during settlement
       },
       walletUpdate: {
         driver: {
           previousBalance: driverPrevBalance,
           newBalance: driver.wallet.balance,
+          balanceChange: driver.wallet.balance - driverPrevBalance,
+          explanation: driver.wallet.balance > 0 
+            ? `Company owes driver ₹${driver.wallet.balance} - Admin should manually transfer when ready`
+            : driver.wallet.balance < 0 
+            ? `Driver owes company ₹${Math.abs(driver.wallet.balance)}`
+            : "Account is balanced"
         },
         admin: {
           name: performingAdmin.name,
           role: role,
           previousBalance: adminPrevBalance,
           newBalance: performingAdmin.wallet.balance,
+          note: "Admin wallet unchanged during settlement - manual transfer required for driver credits"
         },
       },
     });
@@ -455,12 +458,12 @@ export const reverseSettlement = async (req, res) => {
     let adminWalletUpdate = null;
     let adminReversalTxn = null;
 
-    // Reverse the wallet transaction
+    // Reverse the wallet transaction (undo the settlement)
     if (originalAmount !== 0) {
       if (!driver.wallet) driver.wallet = { balance: 0 };
 
-      // Reverse the operation
-      driver.wallet.balance += originalAmount; // Add back if it was debited, subtract if it was credited
+      // Reverse the settlement: opposite of what was done
+      driver.wallet.balance += originalAmount; // Undo the original settlement
       await driver.save();
 
       // Create reversal transaction
@@ -468,7 +471,7 @@ export const reverseSettlement = async (req, res) => {
         userId: driver._id,
         fromAdminId: adminId,
         amount: Math.abs(originalAmount),
-        type: originalAmount > 0 ? "credit" : "debit",
+        type: originalAmount > 0 ? "credit" : "debit", // Opposite of settlement type
         description: `Settlement reversal for booking ${bookingId} - ${reason}`,
         balanceAfter: driver.wallet.balance,
         category: "user_wallet",
@@ -490,7 +493,7 @@ export const reverseSettlement = async (req, res) => {
               adminId: performingAdmin._id,
               amount: originalAmount,
               type: "debit",
-              description: `Settlement reversal payout for booking ${bookingId} - ${reason}`,
+              description: `Settlement reversal: Returning amount to driver for booking ${bookingId} - ${reason}`,
               balanceAfter: performingAdmin.wallet.balance,
               category: "admin_wallet",
             });
@@ -504,7 +507,7 @@ export const reverseSettlement = async (req, res) => {
               adminId: performingAdmin._id,
               amount: creditAmt,
               type: "credit",
-              description: `Settlement reversal receipt for booking ${bookingId} - ${reason}`,
+              description: `Settlement reversal: Receiving returned amount for booking ${bookingId} - ${reason}`,
               balanceAfter: performingAdmin.wallet.balance,
               category: "admin_wallet",
             });

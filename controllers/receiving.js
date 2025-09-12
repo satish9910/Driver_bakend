@@ -1,30 +1,30 @@
 // controllers/receiving.js
+// controllers/receiving.js
 import Receiving from '../models/receiving.js';
 import Booking from '../models/Booking.js';
+import DutyInfo from '../models/dutyInfo.js';
 import mongoose from 'mongoose';
 import Expenses from '../models/expenses.js';
 
+// Updated allowance fields (simplified as requested)
 const numericAllowanceFields = [
     'dailyAllowance',
-    'outstationAllowance',
-    'earlyStartAllowance',
-    'nightAllowance',
-    'receivedFromCompany',
-    'receivedFromClient',
-    'overTime',
-    'sundayAllowance',
-    'outstationOvernightAllowance',
-    'extraDutyAllowance'
+    'outstationAllowance', 
+    'nightAllowance'
 ];
 
+// New receiving fields
+const numericReceivingFields = [
+    'receivedFromClient',
+    'clientAdvanceAmount',
+    'clientBonusAmount',
+    'incentiveAmount'
+];
+
+// All numeric fields combined
+const allNumericFields = [...numericAllowanceFields, ...numericReceivingFields];
+
 const coreFields = [
-    'dutyStartDate',
-    'dutyStartTime',
-    'dutyEndDate',
-    'dutyEndTime',
-    'dutyStartKm',
-    'dutyEndKm',
-    'dutyType',
     'notes'
 ];
 
@@ -32,12 +32,6 @@ function toNumber(val, def = 0) {
     if (val === '' || val == null) return def;
     const n = Number(val);
     return Number.isFinite(n) ? n : def;
-}
-
-function toDate(val) {
-    if (!val) return null;
-    const d = (val instanceof Date) ? val : new Date(val);
-    return isNaN(d.getTime()) ? null : d;
 }
 
 export const upsertReceiving = async (req, res) => {
@@ -50,36 +44,29 @@ export const upsertReceiving = async (req, res) => {
         const booking = await Booking.findById(bookingId);
         if (!booking) return res.status(404).json({ message: 'Booking not found' });
 
-        // Build update doc
+        // Check if duty info exists (required)
+        const dutyInfo = await DutyInfo.findOne({ userId, bookingId });
+        if (!dutyInfo) {
+            return res.status(400).json({ 
+                message: 'Duty information must be filled first. Please create duty info before filling receiving details.',
+                dutyInfoRequired: true
+            });
+        }
+
+        // Build update doc (only allowances and notes now)
         const update = { userId, bookingId };
 
-        // Core non-numeric fields (some dates)
+        // Core non-numeric fields
         coreFields.forEach(f => {
             if (req.body[f] != null) update[f] = req.body[f];
         });
 
-        // Attempt to default from booking if creating new and not supplied (optional)
-        if (req.body.useBookingDefaults) {
-            if (update.dutyStartDate == null && booking.startDate) update.dutyStartDate = booking.startDate;
-            if (update.dutyEndDate == null && booking.endDate) update.dutyEndDate = booking.endDate;
-            if (update.dutyType == null && booking.dutyType) update.dutyType = booking.dutyType;
-        }
-
-        // Cast date fields
-        ['dutyStartDate','dutyEndDate'].forEach(k => {
-            if (update[k] != null) {
-                const d = toDate(update[k]);
-                if (!d) return delete update[k];
-                update[k] = d;
-            }
-        });
-
-        // Numeric allowances
-        numericAllowanceFields.forEach(f => {
+        // Numeric allowances and receiving fields
+        allNumericFields.forEach(f => {
             if (req.body[f] != null) update[f] = toNumber(req.body[f]);
         });
 
-        // billingItems
+        // Handle billingItems
         if (req.body.billingItems != null) {
             try {
                 const arr = typeof req.body.billingItems === 'string'
@@ -100,30 +87,21 @@ export const upsertReceiving = async (req, res) => {
             }
         }
 
-        // Compute totalAllowances (since findOneAndUpdate skips save middleware)
+        // Compute totals (allowances + all receiving fields)
         update.totalAllowances = numericAllowanceFields
-            .filter(f => !['receivedFromCompany','receivedFromClient'].includes(f)) // exclude receivedFrom... if they should not add
+            .reduce((sum, f) => sum + toNumber(update[f] ?? req.body[f]), 0);
+            
+        update.totalReceivingAmount = allNumericFields
             .reduce((sum, f) => sum + toNumber(update[f] ?? req.body[f]), 0);
 
-        // Validate required fields on create (if record not exists)
-        let existing = await Receiving.findOne({ userId, bookingId });
-        if (!existing) {
-            const requiredOnCreate = [
-                'dutyStartDate',
-                'dutyStartTime',
-                'dutyEndDate',
-                'dutyEndTime',
-                'dutyStartKm',
-                'dutyEndKm',
-                'dutyType'
-            ];
-            const missing = requiredOnCreate.filter(f => update[f] == null);
-            if (missing.length) {
-                return res.status(400).json({ message: 'Missing required fields', missing });
-            }
+        // Admin tracking if admin is making changes
+        if (req.admin) {
+            update.lastEditedByAdmin = req.admin.adminId;
+            update.lastEditedByRole = req.admin.role;
+            update.lastEditedAt = new Date();
         }
 
-    const receiving = await Receiving.findOneAndUpdate(
+        const receiving = await Receiving.findOneAndUpdate(
             { userId, bookingId },
             { $set: update },
             { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
@@ -136,9 +114,9 @@ export const upsertReceiving = async (req, res) => {
 
         // Compute totals for response
         const receivingBillingSum = (receiving.billingItems || []).reduce((s,i)=> s + (i.amount||0),0);
-        const totalReceiving = receivingBillingSum + (receiving.totalAllowances||0) + (receiving.receivedFromCompany||0) + (receiving.receivedFromClient||0);
+        const totalReceiving = receivingBillingSum + (receiving.totalReceivingAmount||0);
 
-        // Compute difference with expense for info only (no wallet movement here)
+        // Compute difference with expense for info only
         let reconciliation = null;
         const expense = await Expenses.findOne({ userId, bookingId });
         if (expense) {
@@ -148,7 +126,26 @@ export const upsertReceiving = async (req, res) => {
             reconciliation = { action: 'none', difference };
         }
 
-        res.json({ message: 'Receiving saved', receiving, totals: { receivingBillingSum, receivingAllowances: receiving.totalAllowances || 0, receivedFromCompany: receiving.receivedFromCompany||0, receivedFromClient: receiving.receivedFromClient||0, totalReceiving }, reconciliation });
+        res.json({ 
+            message: 'Receiving saved successfully', 
+            receiving, 
+            dutyInfo: {
+                totalKm: dutyInfo.totalKm,
+                totalHours: dutyInfo.totalHours,
+                totalDays: dutyInfo.totalDays,
+                formattedDuration: dutyInfo.formattedDuration,
+                dateRange: dutyInfo.dateRange,
+                timeRange: dutyInfo.timeRange,
+                dutyType: dutyInfo.dutyType
+            },
+            totals: { 
+                receivingBillingSum, 
+                receivingAllowances: receiving.totalAllowances || 0,
+                receivingAmount: receiving.totalReceivingAmount || 0,
+                totalReceiving 
+            }, 
+            reconciliation 
+        });
     } catch (err) {
         console.error('upsertReceiving error:', err);
         res.status(500).json({ error: 'Server error' });
@@ -161,8 +158,25 @@ export const getReceivingByBooking = async (req, res) => {
         const { bookingId } = req.params;
         if (!mongoose.isValidObjectId(bookingId))
             return res.status(400).json({ message: 'Invalid bookingId' });
+        
         const receiving = await Receiving.findOne({ userId, bookingId });
-        res.json({ receiving });
+        const dutyInfo = await DutyInfo.findOne({ userId, bookingId });
+        
+        res.json({ 
+            receiving, 
+            dutyInfo: dutyInfo ? {
+                ...dutyInfo.toObject(),
+                calculations: {
+                    totalKm: dutyInfo.totalKm,
+                    totalHours: dutyInfo.totalHours,
+                    totalDays: dutyInfo.totalDays,
+                    formattedDuration: dutyInfo.formattedDuration,
+                    dateRange: dutyInfo.dateRange,
+                    timeRange: dutyInfo.timeRange
+                }
+            } : null,
+            message: dutyInfo ? 'Data retrieved successfully' : 'Duty information not found. Please create duty info first.'
+        });
     } catch (err) {
         console.error('getReceivingByBooking error:', err);
         res.status(500).json({ error: 'Server error' });

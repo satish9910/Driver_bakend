@@ -12,24 +12,29 @@ export const addMoneyToWallet = async (req, res) => {
     const admin = await Admin.findById(adminId);
     if (!admin) return res.status(404).json({ message: "Admin not found" });
 
-    // update balance
+    // Add to admin wallet (normal admin wallet logic)
     admin.wallet.balance += amount;
     await admin.save();
 
-    // save transaction
+    // Save transaction
     const transaction = await Transaction.create({
-  fromAdminId: req.user.userId,
+      fromAdminId: req.user.userId,
       adminId: admin._id,
       amount,
       type: "credit",
-      description,
-  balanceAfter: admin.wallet.balance,
-  category: "admin_wallet",
+      description: description || `Admin wallet credit by ${req.user.role}`,
+      balanceAfter: admin.wallet.balance,
+      category: "admin_wallet",
     });
 
-    res.json({ message: "Money added successfully", wallet: admin.wallet, transaction });
+    res.json({ 
+      message: "Money added to admin wallet successfully", 
+      wallet: admin.wallet, 
+      transaction,
+      explanation: "Admin wallet uses standard wallet logic (credit increases balance)"
+    });
   } catch (err) {
-    res.status(500).json({ message: "Error adding money", error: err.message });
+    res.status(500).json({ message: "Error adding money to admin wallet", error: err.message });
   }
 };
 
@@ -44,27 +49,32 @@ export const deductMoneyFromWallet = async (req, res) => {
     if (!admin) return res.status(404).json({ message: "Admin not found" });
 
     if (admin.wallet.balance < amount) {
-      return res.status(400).json({ message: "Insufficient balance" });
+      return res.status(400).json({ message: "Insufficient balance in admin wallet" });
     }
 
-    // update balance
+    // Deduct from admin wallet (normal admin wallet logic)
     admin.wallet.balance -= amount;
     await admin.save();
 
-    // save transaction
+    // Save transaction
     const transaction = await Transaction.create({
-  fromAdminId: req.user.userId,
+      fromAdminId: req.user.userId,
       adminId: admin._id,
       amount,
       type: "debit",
-      description,
-  balanceAfter: admin.wallet.balance,
-  category: "admin_wallet",
+      description: description || `Admin wallet deduction by ${req.user.role}`,
+      balanceAfter: admin.wallet.balance,
+      category: "admin_wallet",
     });
 
-    res.json({ message: "Money deducted successfully", wallet: admin.wallet, transaction });
+    res.json({ 
+      message: "Money deducted from admin wallet successfully", 
+      wallet: admin.wallet, 
+      transaction,
+      explanation: "Admin wallet uses standard wallet logic (debit reduces balance)"
+    });
   } catch (err) {
-    res.status(500).json({ message: "Error deducting money", error: err.message });
+    res.status(500).json({ message: "Error deducting money from admin wallet", error: err.message });
   }
 };
 
@@ -183,9 +193,9 @@ export const transferMoneyToUser = async (req, res) => {
     admin.wallet.balance -= amt;
     await admin.save();
 
-    // Credit to user wallet
+    // REVERSED: Transfer to user creates debt (negative balance)
     if (!user.wallet) user.wallet = { balance: 0 };
-    user.wallet.balance += amt;
+    user.wallet.balance -= amt; // Changed from += to -=
     await user.save();
 
     // Record transactions
@@ -203,17 +213,18 @@ export const transferMoneyToUser = async (req, res) => {
       fromAdminId: admin._id,
       userId: user._id,
       amount: amt,
-      type: "credit",
-      description: description || `Received from ${admin.role}`,
+      type: "debit", // Changed from credit to debit
+      description: description || `Company advance from ${admin.role}`,
       balanceAfter: user.wallet.balance,
       category: "transfer",
     });
 
     res.json({
-      message: "Transfer successful",
+      message: "Transfer successful - driver now owes company",
       adminWallet: admin.wallet,
       userWallet: user.wallet,
       transactions: { adminTxn, userTxn },
+      explanation: "User negative balance means driver owes money to company"
     });
   } catch (err) {
     res.status(500).json({ message: "Error transferring money", error: err.message });
@@ -247,6 +258,13 @@ export const getUserWalletDetails = async (req, res) => {
         totalDebit,
         transactionsCount: transactions.length,
       },
+      balanceExplanation: {
+        message: (user.wallet?.balance || 0) < 0 
+          ? "Negative balance: Driver owes money to company"
+          : (user.wallet?.balance || 0) > 0 
+          ? "Positive balance: Company owes money to driver"
+          : "Account is balanced"
+      }
     });
   } catch (err) {
     res.status(500).json({ message: "Error fetching user wallet", error: err.message });
@@ -291,6 +309,7 @@ export const getUserTransactionsById = async (req, res) => {
 };
 
 // Admin can credit a user's wallet directly (adjustment)
+// NOTE: "Adding money" means driver owes company -> NEGATIVE balance
 export const addMoneyToUserWallet = async (req, res) => {
   try {
     const role = req.user?.role;
@@ -306,26 +325,33 @@ export const addMoneyToUserWallet = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.wallet) user.wallet = { balance: 0 };
-    user.wallet.balance += amt;
+    // REVERSED: When admin adds money, user owes company (negative balance)
+    user.wallet.balance -= amt;
     await user.save();
 
     const txn = await Transaction.create({
       fromAdminId: req.user.userId,
       userId: user._id,
       amount: amt,
-      type: "credit",
-      description: description || `${role} credit`,
+      type: "debit", // Changed from credit to debit
+      description: description || `Company advance to driver - ${role}`,
       balanceAfter: user.wallet.balance,
       category: "user_wallet",
     });
 
-    res.json({ message: "Money added to user wallet", wallet: user.wallet, transaction: txn });
+    res.json({ 
+      message: "Company advance added - driver now owes company", 
+      wallet: user.wallet, 
+      transaction: txn,
+      explanation: "Negative balance means driver owes money to company" 
+    });
   } catch (err) {
     res.status(500).json({ message: "Error adding money to user", error: err.message });
   }
 };
 
 // Admin or subadmin can debit a user's wallet directly (adjustment)
+// NOTE: "Deducting money" means company owes driver -> POSITIVE balance
 export const deductMoneyFromUserWallet = async (req, res) => {
   try {
     const role = req.user?.role;
@@ -339,22 +365,28 @@ export const deductMoneyFromUserWallet = async (req, res) => {
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (!user.wallet || user.wallet.balance < amt) return res.status(400).json({ message: "Insufficient user wallet balance" });
-
-    user.wallet.balance -= amt;
+    
+    if (!user.wallet) user.wallet = { balance: 0 };
+    // REVERSED: When admin deducts money, company owes driver (positive balance)
+    user.wallet.balance += amt;
     await user.save();
 
     const txn = await Transaction.create({
       fromAdminId: req.user.userId,
       userId: user._id,
       amount: amt,
-      type: "debit",
-      description: description || `${role} debit`,
+      type: "credit", // Changed from debit to credit
+      description: description || `Company payment to driver - ${role}`,
       balanceAfter: user.wallet.balance,
       category: "user_wallet",
     });
 
-    res.json({ message: "Money deducted from user wallet", wallet: user.wallet, transaction: txn });
+    res.json({ 
+      message: "Company payment processed - driver balance updated", 
+      wallet: user.wallet, 
+      transaction: txn,
+      explanation: "Positive balance means company owes money to driver" 
+    });
   } catch (err) {
     res.status(500).json({ message: "Error deducting money from user", error: err.message });
   }
@@ -445,6 +477,13 @@ export const getMyWalletDetails = async (req, res) => {
         totalDebit,
         transactionsCount: transactions.length,
       },
+      balanceExplanation: {
+        message: (user.wallet?.balance || 0) < 0 
+          ? "Negative balance means you owe money to the company"
+          : (user.wallet?.balance || 0) > 0 
+          ? "Positive balance means the company owes you money"
+          : "Your account is balanced with the company"
+      }
     });
   } catch (err) {
     res.status(500).json({ message: "Error fetching my wallet", error: err.message });
@@ -489,7 +528,6 @@ export const getSubAdminWalletById = async (req, res) => {
 };
 
 export const addMoneyToSubAdminWallet = async (req, res) => {
-
   try{
     const { subAdminId, amount, description } = req.body;
     if (req.user?.role !== "admin") {
@@ -501,22 +539,27 @@ export const addMoneyToSubAdminWallet = async (req, res) => {
       return res.status(404).json({ message: "Subadmin not found" });
     }
 
-    // update balance
+    // Add to subadmin wallet (normal admin wallet logic)
     subAdmin.wallet.balance += amount;
     await subAdmin.save();
 
-    // save transaction
+    // Save transaction
     const transaction = await Transaction.create({
       fromAdminId: req.user.userId,
       adminId: subAdmin._id,
       amount,
       type: "credit",
-      description,
+      description: description || `Subadmin wallet credit by admin`,
       balanceAfter: subAdmin.wallet.balance,
       category: "admin_wallet",
     });
 
-    res.json({ message: "Money added successfully", wallet: subAdmin.wallet, transaction });
+    res.json({ 
+      message: "Money added to subadmin wallet successfully", 
+      wallet: subAdmin.wallet, 
+      transaction,
+      explanation: "Subadmin wallet uses standard wallet logic (credit increases balance)"
+    });
   } catch (err) {
     res.status(500).json({ message: "Error adding money to subadmin wallet", error: err.message });
   }
@@ -534,22 +577,31 @@ export const deductMoneyFromSubAdminWallet = async (req, res) => {
       return res.status(404).json({ message: "Subadmin not found" });
     }
 
-    // update balance
+    if (subAdmin.wallet.balance < amount) {
+      return res.status(400).json({ message: "Insufficient balance in subadmin wallet" });
+    }
+
+    // Deduct from subadmin wallet (normal admin wallet logic)
     subAdmin.wallet.balance -= amount;
     await subAdmin.save();
 
-    // save transaction
+    // Save transaction
     const transaction = await Transaction.create({
       fromAdminId: req.user.userId,
       adminId: subAdmin._id,
       amount,
       type: "debit",
-      description,
+      description: description || `Subadmin wallet deduction by admin`,
       balanceAfter: subAdmin.wallet.balance,
       category: "admin_wallet",
     });
 
-    res.json({ message: "Money deducted successfully", wallet: subAdmin.wallet, transaction });
+    res.json({ 
+      message: "Money deducted from subadmin wallet successfully", 
+      wallet: subAdmin.wallet, 
+      transaction,
+      explanation: "Subadmin wallet uses standard wallet logic (debit reduces balance)"
+    });
   } catch (err) {
     res.status(500).json({ message: "Error deducting money from subadmin wallet", error: err.message });
   }

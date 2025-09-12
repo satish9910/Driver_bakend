@@ -44,6 +44,7 @@ const bookingSchema = new mongoose.Schema(
     expenses: [{ type: mongoose.Schema.Types.ObjectId, ref: "Expenses" }],
     primaryExpense: { type: mongoose.Schema.Types.ObjectId, ref: "Expenses" },
     receiving: { type: mongoose.Schema.Types.ObjectId, ref: "Receiving" },
+    dutyInfo: { type: mongoose.Schema.Types.ObjectId, ref: "DutyInfo" },
     labels: [{ type: mongoose.Schema.Types.ObjectId, ref: "Label" }],
     status: { type: Number, default: 0 }, 
     settlement: { type: settlementSchema, default: () => ({}) },

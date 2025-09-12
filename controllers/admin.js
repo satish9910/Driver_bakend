@@ -6,6 +6,8 @@ import User from "../models/user.js";
 import admin from "../models/adminModel.js";
 import Expenses from "../models/expenses.js";
 import Receiving from "../models/receiving.js";
+import DutyInfo from "../models/dutyInfo.js";
+import dutyInfo from "../models/dutyInfo.js";
 // import { parseValue } from "../utils/parseValue.js";
 
 // admin states
@@ -532,6 +534,7 @@ const getBookingDetail = async (req, res) => {
         select: "name email mobile drivercode wallet",
       })
       .populate({ path: "primaryExpense", model: "Expenses" })
+      .populate({path:"dutyInfo",model:"DutyInfo"})
       .populate({ path: "receiving", model: "Receiving" })
       .populate({ path: "labels", model: "Label" });
 
@@ -557,26 +560,43 @@ const getBookingDetail = async (req, res) => {
           0
         );
         const receivingAllowances = r.totalAllowances || 0;
-        const receivedFromCompany = r.receivedFromCompany || 0;
-        const receivedFromClient = r.receivedFromClient || 0;
-        const totalReceiving =
-          receivingBillingSum +
-          receivingAllowances +
-          receivedFromCompany +
-          receivedFromClient;
+        const receivingAmount = r.totalReceivingAmount || 0;
+        const totalReceiving = receivingBillingSum + receivingAmount;
         receivingTotals = {
           receivingBillingSum,
           receivingAllowances,
-          receivedFromCompany,
-          receivedFromClient,
+          receivingAmount,
           totalReceiving,
         };
         difference = Number((totalExpense - totalReceiving).toFixed(2));
       }
     }
 
+    // Fetch dutyInfo for structured response (if not populated via booking)
+    let dutyInfo = booking.dutyInfo;
+    if (!dutyInfo && booking.driver) {
+      dutyInfo = await DutyInfo.findOne({ bookingId: id, userId: booking.driver });
+    }
+
     res.json({
       booking,
+      dutyInfo: dutyInfo ? {
+        _id: dutyInfo._id,
+        totalKm: dutyInfo.totalKm,
+        totalHours: dutyInfo.totalHours,
+        totalDays: dutyInfo.totalDays,
+        formattedDuration: dutyInfo.formattedDuration,
+        dateRange: dutyInfo.dateRange,
+        timeRange: dutyInfo.timeRange,
+        dutyType: dutyInfo.dutyType,
+        dutyStartKm: dutyInfo.dutyStartKm,
+        dutyEndKm: dutyInfo.dutyEndKm,
+        startDate: dutyInfo.startDate,
+        endDate: dutyInfo.endDate,
+        startTime: dutyInfo.startTime,
+        endTime: dutyInfo.endTime,
+        notes: dutyInfo.notes
+      } : null,
       totals: {
         expense: expenseTotals,
         receiving: receivingTotals,
@@ -720,27 +740,20 @@ const upsertAdminExpense = async (req, res) => {
       if (b[field] != null) expense[field] = transform(b[field]);
     };
 
-    // Duty fields
-    ["dutyStartDate", "dutyEndDate"].forEach((f) =>
-      setIf(f, (v) => new Date(v))
-    );
-    ["dutyStartTime", "dutyEndTime", "dutyType", "notes"].forEach((f) =>
-      setIf(f)
-    );
-    ["dutyStartKm", "dutyEndKm"].forEach((f) =>
-      setIf(f, (v) => Number(v) || 0)
-    );
+    // Check if duty info exists (required before expense can be updated)
+    const dutyInfo = await DutyInfo.findOne({ userId, bookingId });
+    if (!dutyInfo) {
+      return res.status(400).json({ 
+        message: 'Duty information must be filled first. Please create duty info before updating expense details.',
+        dutyInfoRequired: true
+      });
+    }
 
-    // Allowances
+    // Allowances (simplified to only 3 as requested)
     const allowanceFields = [
       "dailyAllowance",
       "outstationAllowance",
-      "earlyStartAllowance",
       "nightAllowance",
-      "overTime",
-      "sundayAllowance",
-      "outstationOvernightAllowance",
-      "extraDutyAllowance",
     ];
     allowanceFields.forEach((f) => {
       const n = parseNum(b[f]);
@@ -824,11 +837,7 @@ const upsertAdminExpense = async (req, res) => {
         );
 
         const totalExpense = expenseBillingSum + (expense.totalAllowances || 0);
-        const totalReceiving =
-          receivingBillingSum +
-          (receiving.totalAllowances || 0) +
-          (receiving.receivedFromCompany || 0) +
-          (receiving.receivedFromClient || 0);
+        const totalReceiving = receivingBillingSum + (receiving.totalAllowances || 0);
 
         const difference = Number((totalExpense - totalReceiving).toFixed(2));
 
@@ -906,15 +915,21 @@ const upsertAdminExpense = async (req, res) => {
       reconciliation = { action: "error", reason: reconErr.message };
     }
 
-    const totalDistance =
-      expense.dutyStartKm != null && expense.dutyEndKm != null
-        ? expense.dutyEndKm - expense.dutyStartKm
-        : null;
+    const totalDistance = dutyInfo.totalKm || 0; // Get from duty info
 
     res.json({
       message: creating ? "Expense created" : "Expense updated",
       owned: true,
       expense,
+      dutyInfo: {
+        totalKm: dutyInfo.totalKm,
+        totalHours: dutyInfo.totalHours,
+        totalDays: dutyInfo.totalDays,
+        formattedDuration: dutyInfo.formattedDuration,
+        dateRange: dutyInfo.dateRange,
+        timeRange: dutyInfo.timeRange,
+        dutyType: dutyInfo.dutyType
+      },
       totals: {
         billingSum,
         totalAllowances,
@@ -971,27 +986,23 @@ const upsertAdminReceiving = async (req, res) => {
     const setIf = (f, transform = (v) => v) => {
       if (b[f] != null) receiving[f] = transform(b[f]);
     };
-    ["dutyStartDate", "dutyEndDate"].forEach((f) =>
-      setIf(f, (v) => new Date(v))
-    );
-    ["dutyStartTime", "dutyEndTime", "dutyType", "notes"].forEach((f) =>
-      setIf(f)
-    );
-    ["dutyStartKm", "dutyEndKm"].forEach((f) =>
-      setIf(f, (v) => Number(v) || 0)
-    );
-    // Allowances + received
+    // Check if duty info exists (required before receiving can be updated)
+    const dutyInfo = await DutyInfo.findOne({ userId, bookingId });
+    if (!dutyInfo) {
+      return res.status(400).json({ 
+        message: 'Duty information must be filled first. Please create duty info before updating receiving details.',
+        dutyInfoRequired: true
+      });
+    }
+    // Allowances (simplified to only 3 as requested)
     [
       "dailyAllowance",
       "outstationAllowance",
-      "earlyStartAllowance",
       "nightAllowance",
-      "receivedFromCompany",
       "receivedFromClient",
-      "overTime",
-      "sundayAllowance",
-      "outstationOvernightAllowance",
-      "extraDutyAllowance",
+      "clientAdvanceAmount",
+      "clientBonusAmount",
+      "incentiveAmount",
     ].forEach((f) => {
       const n = parseNum(b[f]);
       if (n !== undefined) receiving[f] = n;
@@ -1018,16 +1029,21 @@ const upsertAdminReceiving = async (req, res) => {
         }));
     }
 
-    // Recompute totalAllowances (exclude receivedFromCompany/Client)
+    // Recompute totals (allowances + all receiving amounts)
     receiving.totalAllowances = [
       receiving.dailyAllowance,
       receiving.outstationAllowance,
-      receiving.earlyStartAllowance,
       receiving.nightAllowance,
-      receiving.overTime,
-      receiving.sundayAllowance,
-      receiving.outstationOvernightAllowance,
-      receiving.extraDutyAllowance,
+    ].reduce((s, v) => s + (Number(v) || 0), 0);
+    
+    receiving.totalReceivingAmount = [
+      receiving.dailyAllowance,
+      receiving.outstationAllowance,
+      receiving.nightAllowance,
+      receiving.receivedFromClient,
+      receiving.clientAdvanceAmount,
+      receiving.clientBonusAmount,
+      receiving.incentiveAmount,
     ].reduce((s, v) => s + (Number(v) || 0), 0);
 
     receiving.lastEditedByAdmin = req.user.userId;
@@ -1043,10 +1059,135 @@ const upsertAdminReceiving = async (req, res) => {
       message: creating ? "Receiving created" : "Receiving updated",
       owned: true,
       receiving,
+      dutyInfo: {
+        totalKm: dutyInfo.totalKm,
+        totalHours: dutyInfo.totalHours,
+        totalDays: dutyInfo.totalDays,
+        formattedDuration: dutyInfo.formattedDuration,
+        dateRange: dutyInfo.dateRange,
+        timeRange: dutyInfo.timeRange,
+        dutyType: dutyInfo.dutyType
+      },
+      totals: {
+        billingSum: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0),
+        totalAllowances: receiving.totalAllowances,
+        totalReceivingAmount: receiving.totalReceivingAmount,
+        totalReceiving: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0) + receiving.totalReceivingAmount
+      }
     });
   } catch (err) {
     console.error("upsertAdminReceiving error:", err);
     res.status(500).json({ message: "Server error", error: err.message });
+  }
+};
+
+// Admin/Subadmin create or edit DUTY INFO they own (claim if unowned)
+const upsertAdminDutyInfo = async (req, res) => {
+  try {
+    const role = req.user?.role;
+    if (!['admin', 'subadmin'].includes(role))
+      return res.status(403).json({ message: 'Forbidden' });
+
+    const bookingId = req.params.bookingId || req.body.bookingId;
+    if (!bookingId)
+      return res.status(400).json({ message: 'bookingId required' });
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (!booking.driver)
+      return res
+        .status(400)
+        .json({ message: 'Booking has no driver assigned' });
+    const userId = booking.driver;
+
+    let dutyInfo = await DutyInfo.findOne({ bookingId, userId });
+    const creating = !dutyInfo;
+    if (!dutyInfo) dutyInfo = new DutyInfo({ bookingId, userId });
+
+    // Ownership checks (only original creating admin/subadmin can edit)
+    if (
+      dutyInfo.createdByAdmin &&
+      dutyInfo.createdByAdmin.toString() !== req.user.userId
+    ) {
+      return res
+        .status(403)
+        .json({
+          message: 'Only creating admin/subadmin can edit this duty info',
+        });
+    }
+    if (!dutyInfo.createdByAdmin) {
+      dutyInfo.createdByAdmin = req.user.userId;
+      dutyInfo.createdByRole = role;
+    }
+
+    const b = req.body || {};
+    const parseNum = (v) =>
+      v === '' || v == null ? undefined : Number(v) || 0;
+    const parseDate = (v) => {
+      if (!v) return undefined;
+      const date = new Date(v);
+      return isNaN(date.getTime()) ? undefined : date;
+    };
+    const setIf = (field, transform = (v) => v) => {
+      if (b[field] != null) dutyInfo[field] = transform(b[field]);
+    };
+
+    // Set duty info fields
+    setIf('dutyStartDate', parseDate);
+    setIf('dutyEndDate', parseDate);
+    setIf('dutyStartTime');
+    setIf('dutyEndTime');
+    setIf('dutyStartKm', parseNum);
+    setIf('dutyEndKm', parseNum);
+    setIf('dutyType');
+    setIf('notes');
+
+    // Validation
+    const errors = [];
+    if (!dutyInfo.dutyStartDate) errors.push('Duty start date is required');
+    if (!dutyInfo.dutyStartTime) errors.push('Duty start time is required');
+    if (!dutyInfo.dutyEndDate) errors.push('Duty end date is required');
+    if (!dutyInfo.dutyEndTime) errors.push('Duty end time is required');
+    if (dutyInfo.dutyStartKm === undefined || dutyInfo.dutyStartKm === null) errors.push('Duty start KM is required');
+    if (dutyInfo.dutyEndKm === undefined || dutyInfo.dutyEndKm === null) errors.push('Duty end KM is required');
+    if (!dutyInfo.dutyType) errors.push('Duty type is required');
+    
+    if (dutyInfo.dutyStartKm !== undefined && dutyInfo.dutyEndKm !== undefined && dutyInfo.dutyEndKm < dutyInfo.dutyStartKm) {
+      errors.push('End KM cannot be less than start KM');
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ message: 'Validation failed', errors });
+    }
+
+    dutyInfo.lastEditedByAdmin = req.user.userId;
+    dutyInfo.lastEditedByRole = role;
+    dutyInfo.lastEditedAt = new Date();
+    
+    await dutyInfo.save();
+
+    // Update booking dutyInfo reference
+    if (!booking.dutyInfo) {
+      booking.dutyInfo = dutyInfo._id;
+      await booking.save();
+    }
+
+    res.json({
+      message: creating ? 'Duty info created' : 'Duty info updated',
+      owned: true,
+      dutyInfo,
+      calculations: {
+        totalKm: dutyInfo.totalKm,
+        totalHours: dutyInfo.totalHours,
+        totalDays: dutyInfo.totalDays,
+        formattedDuration: dutyInfo.formattedDuration,
+        dateRange: dutyInfo.dateRange,
+        timeRange: dutyInfo.timeRange
+      }
+    });
+  } catch (err) {
+    console.error('upsertAdminDutyInfo error:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 };
 
@@ -1128,4 +1269,5 @@ export {
   getDriverBookingById,
   upsertAdminExpense,
   upsertAdminReceiving,
+  upsertAdminDutyInfo,
 };

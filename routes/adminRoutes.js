@@ -3,6 +3,7 @@ import multer from "multer";
 import uploads from "../middlewares/multer.js";
 
 import { authentication } from "../middlewares/auth.js";
+import dutyController from "../controllers/duty.js";
 import {
   assignDriver,
   dashboard,
@@ -22,6 +23,7 @@ import {
   settleBooking,
   upsertAdminExpense,
   upsertAdminReceiving,
+  upsertAdminDutyInfo,
 } from "../controllers/admin.js";
 
 import {
@@ -92,9 +94,16 @@ router.put("/assign-driver", authentication, assignDriver);
 router.get("/booking/:id", authentication, getBookingDetail);
 router.put("/booking/:id/status", authentication, updateBookingStatus);
 router.post("/booking/:id/settle", authentication, settleBooking);
-// Admin/Subadmin self-owned expense/receiving upsert
+// Admin/Subadmin self-owned expense/receiving/duty upsert
 router.put('/update-expense-booking/:bookingId', authentication, upsertAdminExpense);
 router.put('/update-receiving-booking/:bookingId', authentication, upsertAdminReceiving);
+router.put('/update-duty-booking/:bookingId', authentication, upsertAdminDutyInfo);
+
+// Duty Information Management - Admin can edit like receiving/expense
+router.get('/duty-info', authentication, dutyController.getAllDutyInfo);
+router.get('/duty-info/:dutyInfoId', authentication, dutyController.getDutyInfoById);
+router.put('/duty-info/:dutyInfoId', authentication, dutyController.adminUpdateDutyInfo);
+router.delete('/duty-info/:dutyInfoId', authentication, dutyController.adminDeleteDutyInfo);
 
 // Settlement routes
 router.get('/booking-settlement-preview/:bookingId', authentication, getSettlementPreview);
@@ -117,15 +126,15 @@ router.get("/transactions", authentication, getAllTransactions); // See all tran
 router.get("/wallet/:adminId", authentication, getWalletDetails);
 
 // Transfers and user wallet views
-router.post("/transfer-to-user", authentication, transferMoneyToUser); // Admin/Subadmin -> User
+router.post("/transfer-to-user", authentication, transferMoneyToUser); // Admin/Subadmin -> User (creates debt for driver)
 router.get("/user-wallet/:userId", authentication, getUserWalletDetails);
 router.get(
   "/my-user-transactions/:userId",
   authentication,
   getUserTransactionsById
 );
-router.post("/user/add-money", authentication, addMoneyToUserWallet); // Admin -> User adjust credit
-router.post("/user/deduct-money", authentication, deductMoneyFromUserWallet); // Admin -> User adjust debit
+router.post("/user/add-money", authentication, addMoneyToUserWallet); // Admin -> User company advance (creates debt)
+router.post("/user/deduct-money", authentication, deductMoneyFromUserWallet); // Admin -> User company payment (reduces debt)
 router.post("/transfer-to-admin", authentication, transferMoneyToAdmin); // Admin -> Subadmin/Admin
 router.get("/my-admin-transactions", authentication, getMyAdminTransactions);
 

@@ -29,31 +29,18 @@ const expenseSchema = new mongoose.Schema(
     },
     // Admin/Subadmin ownership (when created/edited from admin panel)
     createdByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
-    createdByRole: { type: String, enum: ["admin", "subadmin"] },
+    createdByRole: { type: String, enum: ["admin", "subadmin", "user"], default: "user" },
     lastEditedByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+    lastEditedByRole: { type: String, enum: ["admin", "subadmin", "user"] },
     lastEditedAt: { type: Date },
-
-    // Duty Information
-    dutyStartDate: { type: Date, required: true },
-    dutyStartTime: { type: String, required: true },
-    dutyEndDate: { type: Date, required: true },
-    dutyEndTime: { type: String, required: true },
-    dutyStartKm: { type: Number, required: true },
-    dutyEndKm: { type: Number, required: true },
-    dutyType: { type: String, required: true },
 
     // Billing Items
     billingItems: [billingItemSchema],
 
-    // Allowances (Expense Side)
+    // Allowances (only essential ones as requested)
     dailyAllowance: { type: Number, default: 0 },
     outstationAllowance: { type: Number, default: 0 },
-    earlyStartAllowance: { type: Number, default: 0 },
     nightAllowance: { type: Number, default: 0 },
-    overTime: { type: Number, default: 0 },
-    sundayAllowance: { type: Number, default: 0 },
-    outstationOvernightAllowance: { type: Number, default: 0 },
-    extraDutyAllowance: { type: Number, default: 0 },
 
     // Notes
     notes: { type: String, default: "" },
@@ -67,17 +54,12 @@ const expenseSchema = new mongoose.Schema(
 // Ensure unique expense record per user & booking
 expenseSchema.index({ userId: 1, bookingId: 1 }, { unique: true });
 
-// Pre-save hook to auto-calc total allowances
+// Pre-save hook to auto-calc total allowances (simplified)
 expenseSchema.pre("save", function (next) {
   this.totalAllowances =
     (this.dailyAllowance || 0) +
     (this.outstationAllowance || 0) +
-    (this.earlyStartAllowance || 0) +
-    (this.nightAllowance || 0) +
-    (this.overTime || 0) +
-    (this.sundayAllowance || 0) +
-    (this.outstationOvernightAllowance || 0) +
-    (this.extraDutyAllowance || 0);
+    (this.nightAllowance || 0);
   next();
 });
 

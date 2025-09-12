@@ -140,7 +140,7 @@ export const getSettlementDashboard = async (req, res) => {
       if (booking.receiving) {
         const r = booking.receiving;
         const receivingBillingSum = (r.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0);
-        receivingTotal = receivingBillingSum + (r.totalAllowances || 0) + (r.receivedFromCompany || 0) + (r.receivedFromClient || 0);
+        receivingTotal = receivingBillingSum + (r.totalReceivingAmount || 0);
       }
 
       const difference = Number((expenseTotal - receivingTotal).toFixed(2));

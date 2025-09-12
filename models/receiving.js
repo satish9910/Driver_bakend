@@ -27,44 +27,50 @@ const receivingSchema = new mongoose.Schema(
       required: true,
     },
     createdByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
-    createdByRole: { type: String, enum: ["admin", "subadmin"] },
+    createdByRole: { type: String, enum: ["admin", "subadmin", "user"], default: "user" },
     lastEditedByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+    lastEditedByRole: { type: String, enum: ["admin", "subadmin", "user"] },
     lastEditedAt: { type: Date },
-    dutyStartDate: { type: Date, required: true },
-    dutyStartTime: { type: String, required: true },
-    dutyEndDate: { type: Date, required: true },
-    dutyEndTime: { type: String, required: true },
-    dutyStartKm: { type: Number, required: true },
-    dutyEndKm: { type: Number, required: true },
-    dutyType: { type: String, required: true },
+    
+    // Allowances only (duty fields moved to separate DutyInfo model)
     dailyAllowance: { type: Number, default: 0 },
     outstationAllowance: { type: Number, default: 0 },
-    earlyStartAllowance: { type: Number, default: 0 },
     nightAllowance: { type: Number, default: 0 },
-    receivedFromCompany: { type: Number, default: 0 },
+    
+    // Client-related receiving fields
     receivedFromClient: { type: Number, default: 0 },
-    overTime: { type: Number, default: 0 },
-    sundayAllowance: { type: Number, default: 0 },
-    outstationOvernightAllowance: { type: Number, default: 0 },
-    extraDutyAllowance: { type: Number, default: 0 },
+    clientAdvanceAmount: { type: Number, default: 0 },
+    clientBonusAmount: { type: Number, default: 0 },
+    
+    // Additional receiving fields
+    incentiveAmount: { type: Number, default: 0 },
+    
     notes: { type: String, default: "" },
     billingItems: [billingItemSchema],
     totalAllowances: { type: Number, default: 0 },
+    totalReceivingAmount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
 receivingSchema.index({ userId: 1, bookingId: 1 }, { unique: true });
 receivingSchema.pre("save", function (next) {
+  // Calculate total allowances (only allowance fields)
   this.totalAllowances =
     (this.dailyAllowance || 0) +
     (this.outstationAllowance || 0) +
-    (this.earlyStartAllowance || 0) +
+    (this.nightAllowance || 0);
+    
+  // Calculate total receiving amount (all receiving fields)
+  this.totalReceivingAmount = 
+    (this.dailyAllowance || 0) +
+    (this.outstationAllowance || 0) +
     (this.nightAllowance || 0) +
-    (this.overTime || 0) +
-    (this.sundayAllowance || 0) +
-    (this.outstationOvernightAllowance || 0) +
-    (this.extraDutyAllowance || 0);
+    (this.receivedFromClient || 0) +
+    (this.clientAdvanceAmount || 0) +
+    (this.clientBonusAmount || 0) +
+    (this.incentiveAmount || 0);
+    
   next();
 });
 

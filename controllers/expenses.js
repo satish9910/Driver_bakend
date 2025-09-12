@@ -1,7 +1,9 @@
 // controllers/expenses.js
+// controllers/expenses.js
 import Expenses from "../models/expenses.js";
 import Booking from "../models/Booking.js";
 import Receiving from "../models/receiving.js";
+import DutyInfo from "../models/dutyInfo.js";
 import User from "../models/user.js";
 import Transaction from "../models/transectionModel.js";
 
@@ -21,6 +23,7 @@ const postExpenses = async (req, res) => {
 
     const booking = await Booking.findById(bookingId);
     if (!booking) return res.status(404).json({ message: "Booking not found" });
+    
     // Ensure current user is the booking's driver (if driver assigned)
     if (booking.driver && booking.driver.toString() !== userId.toString()) {
       return res
@@ -28,9 +31,17 @@ const postExpenses = async (req, res) => {
         .json({ message: "Not allowed to add expenses to this booking" });
     }
 
+    // Check if duty info exists (required)
+    const dutyInfo = await DutyInfo.findOne({ userId, bookingId });
+    if (!dutyInfo) {
+      return res.status(400).json({ 
+        message: 'Duty information must be filled first. Please create duty info before filling expense details.',
+        dutyInfoRequired: true
+      });
+    }
+
     // Parse billingItems (might come as JSON string from form-data)
     const parseMaybe = (val, fallback) => {
-      
       if (val == null) return fallback;
       if (typeof val === "string") {
         try {
@@ -69,31 +80,11 @@ const postExpenses = async (req, res) => {
           }))
       : [];
 
-    // Duty fields
-    const dutyStartDate = data.dutyStartDate
-      ? new Date(data.dutyStartDate)
-      : null;
-    const dutyEndDate = data.dutyEndDate ? new Date(data.dutyEndDate) : null;
-    const dutyStartTime = data.dutyStartTime || null;
-    const dutyEndTime = data.dutyEndTime || null;
-    const dutyStartKm =
-      data.dutyStartKm !== undefined ? Number(data.dutyStartKm) : null;
-    const dutyEndKm =
-      data.dutyEndKm !== undefined ? Number(data.dutyEndKm) : null;
-    const dutyType = data.dutyType || null;
-
-    // Allowances
+    // Simplified allowances (only essential ones as requested)
     const allowances = {
       dailyAllowance: Number(data.dailyAllowance || 0),
       outstationAllowance: Number(data.outstationAllowance || 0),
-      earlyStartAllowance: Number(data.earlyStartAllowance || 0),
       nightAllowance: Number(data.nightAllowance || 0),
-      overTime: Number(data.overTime || 0),
-      sundayAllowance: Number(data.sundayAllowance || 0),
-      outstationOvernightAllowance: Number(
-        data.outstationOvernightAllowance || 0
-      ),
-      extraDutyAllowance: Number(data.extraDutyAllowance || 0),
     };
 
     const notes = data.notes || "";
@@ -103,35 +94,19 @@ const postExpenses = async (req, res) => {
     const creating = !expense;
     if (!expense) expense = new Expenses({ bookingId, userId });
 
-    // On creation enforce mandatory duty fields (schema requires them). Provide clearer messages.
-    if (creating) {
-      const missing = [];
-      if (!dutyStartDate) missing.push("dutyStartDate");
-      if (!dutyStartTime) missing.push("dutyStartTime");
-      if (!dutyEndDate) missing.push("dutyEndDate");
-      if (!dutyEndTime) missing.push("dutyEndTime");
-      if (dutyStartKm == null) missing.push("dutyStartKm");
-      if (dutyEndKm == null) missing.push("dutyEndKm");
-      if (!dutyType) missing.push("dutyType");
-      if (missing.length) {
-        return res
-          .status(400)
-          .json({ message: "Missing required fields", missing });
-      }
-    }
-
+    // No duty field validation needed since they're handled separately
     Object.assign(expense, {
-      dutyStartDate: dutyStartDate ?? expense.dutyStartDate,
-      dutyEndDate: dutyEndDate ?? expense.dutyEndDate,
-      dutyStartTime: dutyStartTime ?? expense.dutyStartTime,
-      dutyEndTime: dutyEndTime ?? expense.dutyEndTime,
-      dutyStartKm: dutyStartKm != null ? dutyStartKm : expense.dutyStartKm,
-      dutyEndKm: dutyEndKm != null ? dutyEndKm : expense.dutyEndKm,
-      dutyType: dutyType ?? expense.dutyType,
       billingItems,
       notes,
       ...allowances,
     });
+
+    // Admin tracking if admin is making changes
+    if (req.admin) {
+      expense.lastEditedByAdmin = req.admin.adminId;
+      expense.lastEditedByRole = req.admin.role;
+      expense.lastEditedAt = new Date();
+    }
 
     await expense.save();
 
@@ -148,15 +123,21 @@ const postExpenses = async (req, res) => {
     await booking.save();
 
     const billingSum = billingItems.reduce((s, i) => s + i.amount, 0);
-    const totalDistance =
-      expense.dutyStartKm != null && expense.dutyEndKm != null
-        ? expense.dutyEndKm - expense.dutyStartKm
-        : null;
+    const totalDistance = dutyInfo.totalKm || 0; // Get from duty info
     const totalExpense = billingSum + (expense.totalAllowances || 0);
 
     res.json({
       message: creating ? "Expenses created" : "Expenses updated",
       expense,
+      dutyInfo: {
+        totalKm: dutyInfo.totalKm,
+        totalHours: dutyInfo.totalHours,
+        totalDays: dutyInfo.totalDays,
+        formattedDuration: dutyInfo.formattedDuration,
+        dateRange: dutyInfo.dateRange,
+        timeRange: dutyInfo.timeRange,
+        dutyType: dutyInfo.dutyType
+      },
       totals: {
         billingSum,
         totalAllowances: expense.totalAllowances,
@@ -199,11 +180,32 @@ const getExpensesByBookingId = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const userId = req.user.userId;
+    
     const expense = await Expenses.findOne({ bookingId, userId }).populate({
       path: "userId",
       select: "name email mobile",
     });
-    if (!expense) return res.status(200).json({ expense: null, totals: null });
+    
+    const dutyInfo = await DutyInfo.findOne({ bookingId, userId });
+    
+    if (!expense) {
+      return res.status(200).json({ 
+        expense: null, 
+        dutyInfo: dutyInfo ? {
+          ...dutyInfo.toObject(),
+          calculations: {
+            totalKm: dutyInfo.totalKm,
+            totalHours: dutyInfo.totalHours,
+            totalDays: dutyInfo.totalDays,
+            formattedDuration: dutyInfo.formattedDuration,
+            dateRange: dutyInfo.dateRange,
+            timeRange: dutyInfo.timeRange
+          }
+        } : null,
+        totals: null,
+        message: dutyInfo ? 'Duty information found but no expense record yet.' : 'Duty information not found. Please create duty info first.'
+      });
+    }
 
     // Compute expense side totals
     const billingSum = (expense.billingItems || []).reduce(
@@ -223,18 +225,10 @@ const getExpensesByBookingId = async (req, res) => {
         0
       );
       const receivingAllowances = receiving.totalAllowances || 0;
-      const receivedFromCompany = receiving.receivedFromCompany || 0;
-      const receivedFromClient = receiving.receivedFromClient || 0;
-      const totalReceiving =
-        receivingBillingSum +
-        receivingAllowances +
-        receivedFromCompany +
-        receivedFromClient;
+      const totalReceiving = receivingBillingSum + receivingAllowances;
       receivingTotals = {
         receivingBillingSum,
         receivingAllowances,
-        receivedFromCompany,
-        receivedFromClient,
         totalReceiving,
       };
       difference = Number((totalExpense - totalReceiving).toFixed(2));
@@ -242,6 +236,17 @@ const getExpensesByBookingId = async (req, res) => {
 
     res.status(200).json({
       expense,
+      dutyInfo: dutyInfo ? {
+        ...dutyInfo.toObject(),
+        calculations: {
+          totalKm: dutyInfo.totalKm,
+          totalHours: dutyInfo.totalHours,
+          totalDays: dutyInfo.totalDays,
+          formattedDuration: dutyInfo.formattedDuration,
+          dateRange: dutyInfo.dateRange,
+          timeRange: dutyInfo.timeRange
+        }
+      } : null,
       totals: {
         billingSum,
         totalAllowances,
@@ -249,6 +254,7 @@ const getExpensesByBookingId = async (req, res) => {
         receiving: receivingTotals,
         difference,
       },
+      message: dutyInfo ? 'Data retrieved successfully' : 'Duty information not found. Please create duty info first.'
     });
   } catch (err) {
     console.error("Error fetching expenses by booking ID:", err);

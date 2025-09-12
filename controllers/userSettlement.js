@@ -51,7 +51,7 @@ export const getMySettlements = async (req, res) => {
           if (bookingWithPopulated.receiving) {
             const r = bookingWithPopulated.receiving;
             const receivingBillingSum = (r.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0);
-            receivingTotal = receivingBillingSum + (r.totalAllowances || 0) + (r.receivedFromCompany || 0) + (r.receivedFromClient || 0);
+            receivingTotal = receivingBillingSum + (r.totalReceivingAmount || 0);
           }
 
           calculatedAmount = Number((expenseTotal - receivingTotal).toFixed(2));
@@ -163,26 +163,26 @@ export const getBookingSettlementDetails = async (req, res) => {
     if (booking.receiving) {
       const r = booking.receiving;
       const receivingBillingSum = (r.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0);
-      const receivingAllowances = r.totalAllowances || 0;
-      const receivedFromCompany = r.receivedFromCompany || 0;
-      const receivedFromClient = r.receivedFromClient || 0;
-      receivingTotal = receivingBillingSum + receivingAllowances + receivedFromCompany + receivedFromClient;
+      const receivingAmount = r.totalReceivingAmount || 0;
+      receivingTotal = receivingBillingSum + receivingAmount;
       receivingBreakdown = {
         billingItems: r.billingItems || [],
         billingSum: receivingBillingSum,
         allowances: {
           dailyAllowance: r.dailyAllowance || 0,
           outstationAllowance: r.outstationAllowance || 0,
-          earlyStartAllowance: r.earlyStartAllowance || 0,
-          nightAllowance: r.nightAllowance || 0,
-          overTime: r.overTime || 0,
-          sundayAllowance: r.sundayAllowance || 0,
-          outstationOvernightAllowance: r.outstationOvernightAllowance || 0,
-          extraDutyAllowance: r.extraDutyAllowance || 0
+          nightAllowance: r.nightAllowance || 0
         },
-        allowancesSum: receivingAllowances,
-        receivedFromCompany,
-        receivedFromClient,
+        clientReceiving: {
+          receivedFromClient: r.receivedFromClient || 0,
+          clientAdvanceAmount: r.clientAdvanceAmount || 0,
+          clientBonusAmount: r.clientBonusAmount || 0
+        },
+        additionalReceiving: {
+          incentiveAmount: r.incentiveAmount || 0
+        },
+        allowancesSum: r.totalAllowances || 0,
+        receivingAmount: receivingAmount,
         totalReceiving: receivingTotal
       };
     }
@@ -213,10 +213,11 @@ export const getBookingSettlementDetails = async (req, res) => {
       settlementTransaction,
       explanation: {
         message: calculatedDifference > 0 
-          ? `You have spent ₹${Math.abs(calculatedDifference)} more than received. This amount will be deducted from your wallet.`
+          ? `You have spent ₹${Math.abs(calculatedDifference)} more than received. When settled, this will create debt (negative balance) in your wallet.`
           : calculatedDifference < 0 
-          ? `You have received ₹${Math.abs(calculatedDifference)} more than spent. This amount will be credited to your wallet.`
-          : 'Your expenses and receivings are balanced. No wallet adjustment needed.'
+          ? `You have received ₹${Math.abs(calculatedDifference)} more than spent. When settled, this will create credit (positive balance) in your wallet.`
+          : 'Your expenses and receivings are balanced. No wallet adjustment needed.',
+        walletNote: 'Negative balance = You owe company money, Positive balance = Company owes you money'
       }
     });
   } catch (error) {

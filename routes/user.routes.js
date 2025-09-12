@@ -3,6 +3,7 @@ import express from "express";
 import userController from "../controllers/user.js";
 import { authentication } from "../middlewares/auth.js";
 import expensesController from "../controllers/expenses.js";
+import dutyController from "../controllers/duty.js";
 import { getMyUserTransactions, getMyWalletDetails } from "../controllers/wallet.js";
 import { upsertReceiving, getReceivingByBooking } from "../controllers/receiving.js";
 import { 
@@ -16,7 +17,14 @@ const router = express.Router();
 
 
 router.get("/get-user-bookings", authentication, userController.getalldriverbooks);
-// Dynamic field pattern for multiple billing & fuel slips: billingItems[0].image, fuelExpense[0].image, etc.
+
+// Duty Information - Fill once, shows in both receiving & expense
+router.post('/duty-info', authentication, dutyController.upsertDutyInfo);
+router.get('/duty-info/booking/:bookingId', authentication, dutyController.getDutyInfoByBooking);
+router.get('/duty-info/:dutyInfoId', authentication, dutyController.getDutyInfoById);
+router.get('/my-duty-info', authentication, dutyController.getUserDutyInfo);
+
+// Expenses - Updated: No duty fields, shows duty info when filling
 router.post(
 	"/create-expenses",
 	authentication,
@@ -33,6 +41,8 @@ router.post(
 router.get("/get-driver-profile", authentication, userController.getdriverprofile);
 router.get("/get-expenses", authentication, expensesController.getExpenses);
 router.get("/get-expenses-by-booking/:bookingId", authentication, expensesController.getExpensesByBookingId);
+// Booking expense + receiving + stats for a particular booking (driver view)
+router.get("/booking/:bookingId/expense-receiving", authentication, userController.getUserExpenseAndRecievings);
 // Receiving
 router.post('/create-receiving', authentication, upsertReceiving);
 router.get('/receiving/:bookingId', authentication, getReceivingByBooking);
