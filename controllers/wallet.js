@@ -310,6 +310,7 @@ export const getUserTransactionsById = async (req, res) => {
 
 // Admin can credit a user's wallet directly (adjustment)
 // NOTE: "Adding money" means driver owes company -> NEGATIVE balance
+
 export const addMoneyToUserWallet = async (req, res) => {
   try {
     const role = req.user?.role;

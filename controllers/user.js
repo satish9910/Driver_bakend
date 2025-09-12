@@ -5,15 +5,57 @@ import Receiving from "../models/receiving.js";
 import DutyInfo from "../models/dutyInfo.js";
 
 const getalldriverbooks = (req, res) => {
-  console.log("Fetching all driver bookings for user:", req.user.userId);
+  console.log("Fetching filtered driver bookings for user:", req.user.userId);
+  const allowedKeys = new Set([
+    "Duty Id",
+    "Passengers",
+    "Passenger Phone Numbers",
+    "From city",
+    "To city",
+    "Start Date",
+    "End Date",
+    "Reporting Address",
+    "Drop Address",
+    "Driver",
+    "Driver Phone Number",
+    "Driver Code",
+    "Duty Type",
+  ]);
+
   Booking.find({ driver: req.user.userId })
     .populate("driver", "name email mobile drivercode vehicleNumber")
     .sort({ createdAt: -1 })
     .then((bookings) => {
+      const filtered = bookings.map((b) => {
+        const filteredData = (b.data || []).filter((d) => allowedKeys.has(d.key));
+        return {
+          _id: b._id,
+          driver: b.driver ? {
+            _id: b.driver._id,
+            name: b.driver.name,
+            email: b.driver.email,
+            drivercode: b.driver.drivercode,
+            mobile: b.driver.mobile,
+            vehicleNumber: b.driver.vehicleNumber || null,
+          } : null,
+          data: filteredData,
+            status: b.status,
+            settlement: b.settlement ? {
+              isSettled: b.settlement.isSettled,
+              settlementAmount: b.settlement.settlementAmount,
+              status: b.settlement.status,
+              action: b.settlement.action,
+              settledAt: b.settlement.settledAt || null,
+            } : null,
+          createdAt: b.createdAt,
+          updatedAt: b.updatedAt,
+        };
+      });
+
       res.status(200).json({
         success: true,
-        count: bookings.length,
-        bookings,
+        count: filtered.length,
+        bookings: filtered,
       });
     })
     .catch((error) => {
@@ -21,6 +63,10 @@ const getalldriverbooks = (req, res) => {
       res.status(500).json({ success: false, message: "Server error" });
     });
 };
+
+
+
+
 
  const getdriverprofile = (req, res) => {
   console.log("Fetching driver profile for user:", req.user.userId);
