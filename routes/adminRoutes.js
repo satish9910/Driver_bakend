@@ -42,6 +42,7 @@ import {
   addMoneyToSubAdminWallet,
   deductMoneyFromSubAdminWallet,
   getSubAdminWalletTransactions,
+  collectMoneyFromDriver,
 } from "../controllers/wallet.js";
 import { createLabel, getLabels, setBookingLabels } from "../controllers/label.js";
 import {
@@ -55,6 +56,12 @@ import {
   getSettlementDashboard,
   getDriverSettlementAnalytics
 } from "../controllers/settlementDashboard.js";
+import {
+  getReportingDashboard,
+  getFinancialAnalytics,
+  getDriverPerformanceReport,
+  getReportingDashboardDemo
+} from "../controllers/reportingDashboard.js";
 
 const upload = multer({ dest: "uploads/" });
 
@@ -116,6 +123,12 @@ router.get('/settlements/pending', authentication, getPendingSettlements);
 router.get('/dashboard-settlements', authentication, getSettlementDashboard);
 router.get('/driver-settlement-analytics/:driverId', authentication, getDriverSettlementAnalytics);
 
+// 📊 NEW: Comprehensive Reporting Dashboard Routes
+router.get('/reporting-dashboard', authentication, getReportingDashboard);
+router.get('/financial-analytics', authentication, getFinancialAnalytics);
+router.get('/driver-performance-report', authentication, getDriverPerformanceReport);
+router.get('/reporting-dashboard-demo', authentication, getReportingDashboardDemo);
+
 //wallet routes
 
 // 💰 Wallet Routes
@@ -127,6 +140,7 @@ router.get("/wallet/:adminId", authentication, getWalletDetails);
 
 // Transfers and user wallet views
 router.post("/transfer-to-user", authentication, transferMoneyToUser); // Admin/Subadmin -> User (creates debt for driver)
+router.post("/collect-from-driver", authentication, collectMoneyFromDriver); // 🆕 NEW: Admin/Subadmin <- Driver (collect money)
 router.get("/user-wallet/:userId", authentication, getUserWalletDetails);
 router.get(
   "/my-user-transactions/:userId",
