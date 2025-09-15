@@ -602,6 +602,58 @@ const getBookingDetail = async (req, res) => {
         receiving: receivingTotals,
         difference,
       },
+      // Added settlement wallet projection logic
+      settlementSummary: (() => {
+        if (!expenseTotals || !receivingTotals || difference == null || !booking.driver) {
+          return null;
+        }
+        /**
+         * IMPORTANT: In this project the so-called "driver wallet" is a COMPANY LEDGER (loan account):
+         *   Negative value => Company has GIVEN (loan/advance) to driver; driver must return this (driver owes company).
+         *   Positive value => Driver has over-spent using own funds and company must reimburse (company owes driver).
+         * difference = expenseTotal - receivingTotal for ONLY this booking.
+         *   difference > 0  => Driver spent more personal money than received from client/company (increases company liability / reduces driver debt).
+         *   difference < 0  => Driver collected more than spent (reduces company liability or increases driver debt).
+         */
+        const ledgerBalance = booking.driver.wallet?.balance || 0; // existing loan ledger BEFORE considering this booking
+        const bookingDelta = difference; // booking effect
+        const newLedgerBalance = Number((ledgerBalance + bookingDelta).toFixed(2));
+
+        // Effect classification relative to company vs driver
+        let effect = "no_change"; // driver_debt_increases | driver_debt_decreases | company_liability_increases | company_liability_decreases
+        if (bookingDelta !== 0) {
+          if (bookingDelta > 0) {
+            // Company owes more OR driver debt reduced
+            effect = ledgerBalance < 0 ? "driver_debt_decreases" : "company_liability_increases";
+          } else {
+            // bookingDelta < 0: company liability decreases OR driver debt increases
+            effect = ledgerBalance > 0 ? "company_liability_decreases" : "driver_debt_increases";
+          }
+        }
+
+        // Immediate physical cash suggestions (optional usage):
+        // We DO NOT propose 'zeroing' automatically. Instead show targeted action:
+        const driverShouldPayNow = newLedgerBalance < 0 ? Math.abs(newLedgerBalance) : 0; // amount driver would need to pay to clear debt fully
+        const companyShouldPayNow = newLedgerBalance > 0 ? newLedgerBalance : 0; // amount company would need to reimburse to clear liability fully
+
+        // Provide plain language strings
+        const explanations = [];
+        explanations.push(`Current ledger (before booking): ₹${ledgerBalance} (${ledgerBalance === 0 ? 'balanced' : ledgerBalance < 0 ? `driver owes company ₹${Math.abs(ledgerBalance)}` : `company owes driver ₹${ledgerBalance}`})`);
+        explanations.push(`Booking impact (expense - receiving): ₹${bookingDelta} (${bookingDelta === 0 ? 'no impact' : bookingDelta > 0 ? 'driver added own funds (company liability up / debt down)' : 'driver collected excess (company liability down / debt up)'})`);
+        explanations.push(`Ledger after applying booking: ₹${newLedgerBalance} (${newLedgerBalance === 0 ? 'balanced' : newLedgerBalance < 0 ? `driver owes company ₹${Math.abs(newLedgerBalance)}` : `company owes driver ₹${newLedgerBalance}`})`);
+        if (driverShouldPayNow) explanations.push(`To settle now: collect ₹${driverShouldPayNow} from driver to reach zero.`);
+        if (companyShouldPayNow) explanations.push(`To settle now: pay driver ₹${companyShouldPayNow} to reach zero.`);
+
+        return {
+          ledgerBalance,
+          bookingDelta,
+          newLedgerBalance,
+          effect,
+          driverShouldPayNow,
+          companyShouldPayNow,
+          explanations,
+        };
+      })()
     });
   } catch (err) {
     res

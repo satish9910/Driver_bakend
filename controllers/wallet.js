@@ -630,7 +630,7 @@ export const getSubAdminWalletTransactions = async (req, res) => {
   }
 };
 
-// 🚀 NEW: Admin/Sub-admin collect money FROM driver wallet TO their wallet
+// 🚀 UPDATED: Admin/Sub-admin collect money FROM driver wallet (positive or negative)
 export const collectMoneyFromDriver = async (req, res) => {
   try {
     const { userId, amount, description } = req.body;
@@ -661,32 +661,55 @@ export const collectMoneyFromDriver = async (req, res) => {
 
     if (!driver.wallet) driver.wallet = { balance: 0 };
 
-    // REVERSED: Driver must have negative balance (driver owes company)
-    if (driver.wallet.balance >= 0) {
+    const currentBalance = driver.wallet.balance;
+    let collectionType = "";
+    let newDriverBalance = 0;
+    let transactionDescription = "";
+    
+    if (currentBalance < 0) {
+      // Driver has debt (negative balance) - collecting debt payment
+      if (Math.abs(currentBalance) < amt) {
+        return res.status(400).json({ 
+          message: "Collection amount exceeds driver's debt",
+          currentDebt: Math.abs(currentBalance),
+          requestedAmount: amt,
+          explanation: "Cannot collect more than what driver owes"
+        });
+      }
+      
+      collectionType = "debt_collection";
+      newDriverBalance = currentBalance + amt; // Reduce debt (make less negative)
+      transactionDescription = description || `Debt payment collected by ${role}`;
+      
+    } else if (currentBalance > 0) {
+      // Driver wants money (positive balance) - collecting from driver's claim
+      if (currentBalance < amt) {
+        return res.status(400).json({ 
+          message: "Collection amount exceeds driver's available balance",
+          availableBalance: currentBalance,
+          requestedAmount: amt,
+          explanation: "Cannot collect more than driver's available amount"
+        });
+      }
+      
+      collectionType = "balance_collection";
+      newDriverBalance = currentBalance - amt; // Reduce driver's claim
+      transactionDescription = description || `Balance collected from driver by ${role}`;
+      
+    } else {
+      // Driver balance is zero
       return res.status(400).json({ 
-        message: "Driver has no debt to collect",
-        currentBalance: driver.wallet.balance,
-        explanation: driver.wallet.balance > 0 
-          ? "Company owes money to driver - cannot collect debt" 
-          : "Driver account is balanced - no debt to collect"
+        message: "Driver has no balance to collect",
+        currentBalance: 0,
+        explanation: "Driver account is balanced - nothing to collect"
       });
     }
 
-    // Check if collection amount is within debt limit
-    if (Math.abs(driver.wallet.balance) < amt) {
-      return res.status(400).json({ 
-        message: "Collection amount exceeds driver's debt",
-        currentDebt: Math.abs(driver.wallet.balance),
-        requestedAmount: amt,
-        explanation: "Cannot collect more than what driver owes"
-      });
-    }
-
-    // Transfer money: Driver debt → Admin (reduce debt, increase admin wallet)
-    driver.wallet.balance += amt;  // Reduce driver's debt (make balance less negative)
+    // Update balances
+    driver.wallet.balance = newDriverBalance;
     await driver.save();
 
-    admin.wallet.balance += amt;   // Increase admin wallet
+    admin.wallet.balance += amt; // Admin wallet always increases
     await admin.save();
 
     // Record transactions
@@ -694,8 +717,8 @@ export const collectMoneyFromDriver = async (req, res) => {
       fromAdminId: admin._id,
       userId: driver._id,
       amount: amt,
-      type: "credit",
-      description: description || `Debt payment collected by ${role}`,
+      type: collectionType === "debt_collection" ? "credit" : "debit",
+      description: transactionDescription,
       balanceAfter: driver.wallet.balance,
       category: "transfer",
     });
@@ -705,23 +728,37 @@ export const collectMoneyFromDriver = async (req, res) => {
       adminId: admin._id,
       amount: amt,
       type: "credit",
-      description: description || `Debt collection from driver ${driver.name}`,
+      description: description || `Collection from driver ${driver.name} (${collectionType})`,
       balanceAfter: admin.wallet.balance,
       category: "transfer",
     });
 
+    // Determine result explanation
+    let resultExplanation = "";
+    if (newDriverBalance < 0) {
+      resultExplanation = `Driver still owes ₹${Math.abs(newDriverBalance)} to company`;
+    } else if (newDriverBalance > 0) {
+      resultExplanation = `Driver still wants ₹${newDriverBalance} from company`;
+    } else {
+      resultExplanation = "Driver account is now balanced";
+    }
+
     res.json({
-      message: "Driver debt collected successfully",
+      message: "Money collected from driver successfully",
+      collectionType,
+      previousBalance: currentBalance,
+      collectedAmount: amt,
       driverWallet: driver.wallet,
       adminWallet: admin.wallet,
       transactions: { driverTxn, adminTxn },
       explanation: {
-        driverBalance: driver.wallet.balance < 0 
-          ? "Driver still owes money to company" 
-          : driver.wallet.balance > 0 
-          ? "Collection exceeded debt - company now owes driver" 
-          : "Driver debt fully settled",
-        action: "Debt collection successfully transferred to admin wallet"
+        before: currentBalance < 0 
+          ? `Driver owed ₹${Math.abs(currentBalance)} to company` 
+          : currentBalance > 0 
+          ? `Driver wanted ₹${currentBalance} from company`
+          : "Driver account was balanced",
+        action: `Collected ₹${amt} from driver`,
+        after: resultExplanation
       }
     });
   } catch (err) {

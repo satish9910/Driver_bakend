@@ -130,8 +130,8 @@ const getUserExpenseAndRecievings = async (req, res) => {
     const receivingAmount = Number(receivingDoc?.totalReceivingAmount || 0);
     const receivingTotal = Number((receivingBilling + receivingAmount).toFixed(2));
 
-    const difference = Number((expenseTotal - receivingTotal).toFixed(2));
-    const settlementHint = difference > 0 ? "driver_owes" : difference < 0 ? "company_owes" : "settled";
+    const difference = Number((expenseTotal - receivingTotal).toFixed(2)); // CORRECTED: expense - receiving
+    const settlementHint = difference > 0 ? "driver_wants_money" : difference < 0 ? "driver_has_extra" : "balanced";
 
     // Extract a few common keys for convenience
     const keyMap = {};
@@ -212,10 +212,62 @@ const getUserExpenseAndRecievings = async (req, res) => {
           // Booking marked completed/settled; hide extra status fields
           base.settled = true;
         } else {
-          base.status = difference > 0 ? "over" : difference < 0 ? "under" : "balanced";
+          base.status = difference > 0 ? "wants_money" : difference < 0 ? "has_extra" : "balanced";
           base.settlementHint = settlementHint; // direction only, not an action
         }
         return base;
+      })(),
+      // Settlement summary matching admin logic - CORRECTED
+      settlementSummary: (() => {
+        if (!booking.driver?.wallet) {
+          return null;
+        }
+        
+        const currentWalletBalance = booking.driver.wallet.balance || 0;
+        const tripSettlement = difference; // expense - receiving for this trip
+        const finalWalletBalance = Number((currentWalletBalance + tripSettlement).toFixed(2));
+        
+        // Driver-friendly explanations
+        const explanation = [];
+        
+        // Current wallet status
+        if (currentWalletBalance < 0) {
+          explanation.push(`💰 Current: You have ₹${Math.abs(currentWalletBalance)} loan from company`);
+        } else if (currentWalletBalance > 0) {
+          explanation.push(`💰 Current: You want ₹${currentWalletBalance} from company`);
+        } else {
+          explanation.push(`💰 Current: Account is balanced`);
+        }
+        
+        // Trip impact
+        if (tripSettlement > 0) {
+          explanation.push(`🚗 Trip: You spent ₹${tripSettlement} more than you received (you want this amount)`);
+        } else if (tripSettlement < 0) {
+          explanation.push(`🚗 Trip: You received ₹${Math.abs(tripSettlement)} more than you spent (you have extra)`);
+        } else {
+          explanation.push(`🚗 Trip: Your expenses and receiving are equal`);
+        }
+        
+        // Final settlement result
+        let settlementMessage = "";
+        if (finalWalletBalance > 0) {
+          settlementMessage = `🔄 Settlement: Company gives you ₹${finalWalletBalance}`;
+        } else if (finalWalletBalance < 0) {
+          settlementMessage = `🔄 Settlement: You give ₹${Math.abs(finalWalletBalance)} to company`;
+        } else {
+          settlementMessage = `🔄 Settlement: Account balanced - no money exchange`;
+        }
+        explanation.push(settlementMessage);
+        
+        return {
+          currentBalance: currentWalletBalance,
+          tripExpense: expenseTotal,
+          tripReceiving: receivingTotal,
+          tripSettlement,
+          finalBalance: finalWalletBalance,
+          explanation,
+          paymentDirection: finalWalletBalance > 0 ? "company_gives_to_you" : finalWalletBalance < 0 ? "you_give_to_company" : "balanced"
+        };
       })(),
       message: {
         dutyInfo: dutyInfo ? "Duty information available" : "Duty information not found. Please create duty info first.",
