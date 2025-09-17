@@ -41,13 +41,14 @@ const postExpenses = async (req, res) => {
     }
 
     // Parse billingItems (might come as JSON string from form-data)
-    const parseMaybe = (val, fallback) => {
+      const parseMaybe = (val, fallback) => {
       if (val == null) return fallback;
       if (typeof val === "string") {
         try {
           return JSON.parse(val);
-        } catch {
-          return fallback;
+            } catch (e) {
+              // Surface parsing issues clearly
+              throw new Error("billingItems invalid JSON");
         }
       }
       return val;
@@ -56,7 +57,18 @@ const postExpenses = async (req, res) => {
     let billingItems = parseMaybe(data.billingItems, []);
 
     // Attach uploaded images for billing items
-    if (req.files) {
+    // Multer .any() gives req.files as array
+    if (Array.isArray(req.files)) {
+      req.files.forEach((f) => {
+        const field = f.fieldname || '';
+        const match = field.match(/^billingItems\[(\d+)\]\.image$/);
+        if (match) {
+          const index = parseInt(match[1]);
+          if (billingItems[index]) billingItems[index].image = f.path;
+        }
+      });
+    } else if (req.files) {
+      // Multer .fields() style fallback
       for (const field in req.files) {
         const filesArr = req.files[field];
         filesArr.forEach((f) => {
@@ -108,7 +120,7 @@ const postExpenses = async (req, res) => {
       expense.lastEditedAt = new Date();
     }
 
-    await expense.save();
+      await expense.save();
 
     // Link expense to booking
     if (
@@ -147,7 +159,10 @@ const postExpenses = async (req, res) => {
     });
   } catch (err) {
     console.error("Error upserting expenses:", err);
-    res.status(500).json({ error: "Server error" });
+      if (err.message === 'billingItems invalid JSON') {
+        return res.status(400).json({ message: err.message });
+      }
+      res.status(500).json({ error: "Server error", details: err.message });
   }
 };
 

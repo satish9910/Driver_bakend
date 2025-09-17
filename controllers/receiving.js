@@ -66,7 +66,7 @@ export const upsertReceiving = async (req, res) => {
             if (req.body[f] != null) update[f] = toNumber(req.body[f]);
         });
 
-        // Handle billingItems
+        // Handle billingItems (JSON payload)
         if (req.body.billingItems != null) {
             try {
                 const arr = typeof req.body.billingItems === 'string'
@@ -82,8 +82,33 @@ export const upsertReceiving = async (req, res) => {
                             note: i.note || ''
                         }));
                 }
-            } catch {
-                return res.status(400).json({ message: 'billingItems invalid JSON' });
+            } catch (e) {
+                return res.status(400).json({ message: 'billingItems invalid JSON', details: e.message });
+            }
+        }
+
+        // Attach uploaded images to billing items if present (expects fields like billingItems[0].image)
+        if (update.billingItems && Array.isArray(update.billingItems)) {
+            if (Array.isArray(req.files)) {
+                req.files.forEach(f => {
+                    const field = f.fieldname || '';
+                    const m = field.match(/^billingItems\[(\d+)\]\.image$/);
+                    if (m) {
+                        const idx = parseInt(m[1]);
+                        if (update.billingItems[idx]) update.billingItems[idx].image = f.path;
+                    }
+                });
+            } else if (req.files) {
+                for (const field in req.files) {
+                    const filesArr = req.files[field];
+                    filesArr.forEach(f => {
+                        const m = field.match(/^billingItems\[(\d+)\]\.image$/);
+                        if (m) {
+                            const idx = parseInt(m[1]);
+                            if (update.billingItems[idx]) update.billingItems[idx].image = f.path;
+                        }
+                    });
+                }
             }
         }
 
@@ -101,11 +126,16 @@ export const upsertReceiving = async (req, res) => {
             update.lastEditedAt = new Date();
         }
 
-        const receiving = await Receiving.findOneAndUpdate(
+        let receiving;
+        try {
+            receiving = await Receiving.findOneAndUpdate(
             { userId, bookingId },
             { $set: update },
             { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
-        );
+            );
+        } catch (e) {
+            return res.status(400).json({ message: 'Validation failed', details: e.message });
+        }
 
         if (!booking.receiving) {
             booking.receiving = receiving._id;

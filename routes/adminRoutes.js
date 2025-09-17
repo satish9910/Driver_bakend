@@ -102,8 +102,18 @@ router.get("/booking/:id", authentication, getBookingDetail);
 router.put("/booking/:id/status", authentication, updateBookingStatus);
 router.post("/booking/:id/settle", authentication, settleBooking);
 // Admin/Subadmin self-owned expense/receiving/duty upsert
-router.put('/update-expense-booking/:bookingId', authentication, upsertAdminExpense);
-router.put('/update-receiving-booking/:bookingId', authentication, upsertAdminReceiving);
+router.put(
+  '/update-expense-booking/:bookingId',
+  authentication,
+  uploads.any(),
+  upsertAdminExpense
+);
+router.put(
+  '/update-receiving-booking/:bookingId',
+  authentication,
+  uploads.any(),
+  upsertAdminReceiving
+);
 router.put('/update-duty-booking/:bookingId', authentication, upsertAdminDutyInfo);
 
 // Duty Information Management - Admin can edit like receiving/expense

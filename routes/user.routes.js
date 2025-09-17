@@ -26,17 +26,10 @@ router.get('/my-duty-info', authentication, dutyController.getUserDutyInfo);
 
 // Expenses - Updated: No duty fields, shows duty info when filling
 router.post(
-	"/create-expenses",
-	authentication,
-	upload.fields([
-		{ name: 'billingItems[0].image' },
-		{ name: 'billingItems[1].image' },
-		{ name: 'billingItems[2].image' },
-		{ name: 'fuelExpense[0].image' },
-		{ name: 'fuelExpense[1].image' },
-		{ name: 'fuelExpense[2].image' }
-	]),
-	expensesController.postExpenses
+  "/create-expenses",
+  authentication,
+  upload.any(),
+  expensesController.postExpenses
 );
 router.get("/get-driver-profile", authentication, userController.getdriverprofile);
 router.get("/get-expenses", authentication, expensesController.getExpenses);
@@ -44,7 +37,12 @@ router.get("/get-expenses-by-booking/:bookingId", authentication, expensesContro
 // Booking expense + receiving + stats for a particular booking (driver view)
 router.get("/booking/:bookingId/expense-receiving", authentication, userController.getUserExpenseAndRecievings);
 // Receiving
-router.post('/create-receiving', authentication, upsertReceiving);
+router.post(
+	'/create-receiving',
+	authentication,
+	upload.any(),
+	upsertReceiving
+);
 router.get('/receiving/:bookingId', authentication, getReceivingByBooking);
 
 // Wallet

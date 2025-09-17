@@ -7,7 +7,6 @@ import admin from "../models/adminModel.js";
 import Expenses from "../models/expenses.js";
 import Receiving from "../models/receiving.js";
 import DutyInfo from "../models/dutyInfo.js";
-import dutyInfo from "../models/dutyInfo.js";
 // import { parseValue } from "../utils/parseValue.js";
 
 // admin states
@@ -572,31 +571,19 @@ const getBookingDetail = async (req, res) => {
       }
     }
 
-    // Fetch dutyInfo for structured response (if not populated via booking)
-    let dutyInfo = booking.dutyInfo;
-    if (!dutyInfo && booking.driver) {
-      dutyInfo = await DutyInfo.findOne({ bookingId: id, userId: booking.driver });
+    // Fetch dutyInfo for structured response (if not populated via booking) and embed inside booking
+    let dutyInfoDoc = booking.dutyInfo;
+    if (!dutyInfoDoc && booking.driver) {
+      const driverId = booking.driver?._id || booking.driver;
+      dutyInfoDoc = await DutyInfo.findOne({ bookingId: id, userId: driverId });
+    }
+    const bookingObj = booking.toObject({ virtuals: true });
+    if (!bookingObj.dutyInfo && dutyInfoDoc) {
+      bookingObj.dutyInfo = dutyInfoDoc.toObject({ virtuals: true });
     }
 
     res.json({
-      booking,
-      dutyInfo: dutyInfo ? {
-        _id: dutyInfo._id,
-        totalKm: dutyInfo.totalKm,
-        totalHours: dutyInfo.totalHours,
-        totalDays: dutyInfo.totalDays,
-        formattedDuration: dutyInfo.formattedDuration,
-        dateRange: dutyInfo.dateRange,
-        timeRange: dutyInfo.timeRange,
-        dutyType: dutyInfo.dutyType,
-        dutyStartKm: dutyInfo.dutyStartKm,
-        dutyEndKm: dutyInfo.dutyEndKm,
-        startDate: dutyInfo.startDate,
-        endDate: dutyInfo.endDate,
-        startTime: dutyInfo.startTime,
-        endTime: dutyInfo.endTime,
-        notes: dutyInfo.notes
-      } : null,
+      booking: bookingObj,
       totals: {
         expense: expenseTotals,
         receiving: receivingTotals,
@@ -608,49 +595,55 @@ const getBookingDetail = async (req, res) => {
           return null;
         }
         /**
-         * IMPORTANT: In this project the so-called "driver wallet" is a COMPANY LEDGER (loan account):
-         *   Negative value => Company has GIVEN (loan/advance) to driver; driver must return this (driver owes company).
-         *   Positive value => Driver has over-spent using own funds and company must reimburse (company owes driver).
-         * difference = expenseTotal - receivingTotal for ONLY this booking.
-         *   difference > 0  => Driver spent more personal money than received from client/company (increases company liability / reduces driver debt).
-         *   difference < 0  => Driver collected more than spent (reduces company liability or increases driver debt).
+         * Wallet Sign Convention (as per new requirement):
+         * driver.wallet.balance > 0  => Company owes driver that amount (driver credit)
+         * driver.wallet.balance < 0  => Driver owes company |balance| (driver debt)
+         * difference = expenseTotal - receivingTotal for JUST this booking
+         *   difference > 0  => Driver spent more than received => company should give driver (potential credit)
+         *   difference < 0  => Driver received more than spent => driver owes company (increase debt)
+         * We combine existing wallet and this booking's difference to show net position if this booking is settled.
          */
-        const ledgerBalance = booking.driver.wallet?.balance || 0; // existing loan ledger BEFORE considering this booking
-        const bookingDelta = difference; // booking effect
-        const newLedgerBalance = Number((ledgerBalance + bookingDelta).toFixed(2));
+        const walletBalance = booking.driver.wallet?.balance || 0; // existing aggregated balance BEFORE this booking settlement
+        const bookingDifference = difference; // this booking's delta
+        const projectedWalletIfSettled = Number((walletBalance + bookingDifference).toFixed(2));
 
-        // Effect classification relative to company vs driver
-        let effect = "no_change"; // driver_debt_increases | driver_debt_decreases | company_liability_increases | company_liability_decreases
-        if (bookingDelta !== 0) {
-          if (bookingDelta > 0) {
-            // Company owes more OR driver debt reduced
-            effect = ledgerBalance < 0 ? "driver_debt_decreases" : "company_liability_increases";
-          } else {
-            // bookingDelta < 0: company liability decreases OR driver debt increases
-            effect = ledgerBalance > 0 ? "company_liability_decreases" : "driver_debt_increases";
-          }
+        // Immediate cash flow logic examples:
+        // Scenario A: projectedWalletIfSettled > 0 => after settlement company owes driver that amount (company should pay driver that positive amount OR keep as credit)
+        // Scenario B: projectedWalletIfSettled < 0 => driver owes company |projectedWalletIfSettled| (company can collect)
+        // We also expose what part of the difference offsets existing debt/credit.
+
+        let action = "none"; // 'pay_driver' or 'collect_from_driver'
+        if (bookingDifference > 0) {
+          // Company owes driver for this booking
+          action = projectedWalletIfSettled > 0 ? "pay_driver" : "offset_debt"; // if still negative after applying, it only reduces debt
+        } else if (bookingDifference < 0) {
+          // Driver owes company from this booking
+            action = projectedWalletIfSettled < 0 ? "collect_from_driver" : "offset_credit"; // if becomes positive, difference only reduced credit
         }
 
-        // Immediate physical cash suggestions (optional usage):
-        // We DO NOT propose 'zeroing' automatically. Instead show targeted action:
-        const driverShouldPayNow = newLedgerBalance < 0 ? Math.abs(newLedgerBalance) : 0; // amount driver would need to pay to clear debt fully
-        const companyShouldPayNow = newLedgerBalance > 0 ? newLedgerBalance : 0; // amount company would need to reimburse to clear liability fully
+        // Amount that actually needs to move as cash NOW for a full physical settlement (if you choose to zero wallet):
+        // If you want to settle physically so that wallet becomes 0 right now:
+        //   If projectedWalletIfSettled > 0 => company should pay driver that amount to zero out.
+        //   If projectedWalletIfSettled < 0 => driver should pay company |projectedWalletIfSettled| to zero out.
+        const cashToZeroWallet = projectedWalletIfSettled === 0 ? 0 : Math.abs(projectedWalletIfSettled);
+        const cashDirection = projectedWalletIfSettled > 0 ? "company_pays_driver" : projectedWalletIfSettled < 0 ? "driver_pays_company" : "none";
 
-        // Provide plain language strings
+        // Explanation strings
         const explanations = [];
-        explanations.push(`Current ledger (before booking): ₹${ledgerBalance} (${ledgerBalance === 0 ? 'balanced' : ledgerBalance < 0 ? `driver owes company ₹${Math.abs(ledgerBalance)}` : `company owes driver ₹${ledgerBalance}`})`);
-        explanations.push(`Booking impact (expense - receiving): ₹${bookingDelta} (${bookingDelta === 0 ? 'no impact' : bookingDelta > 0 ? 'driver added own funds (company liability up / debt down)' : 'driver collected excess (company liability down / debt up)'})`);
-        explanations.push(`Ledger after applying booking: ₹${newLedgerBalance} (${newLedgerBalance === 0 ? 'balanced' : newLedgerBalance < 0 ? `driver owes company ₹${Math.abs(newLedgerBalance)}` : `company owes driver ₹${newLedgerBalance}`})`);
-        if (driverShouldPayNow) explanations.push(`To settle now: collect ₹${driverShouldPayNow} from driver to reach zero.`);
-        if (companyShouldPayNow) explanations.push(`To settle now: pay driver ₹${companyShouldPayNow} to reach zero.`);
+        explanations.push(`Existing wallet balance: ₹${walletBalance} (${walletBalance === 0 ? "balanced" : walletBalance > 0 ? `company owes driver ₹${walletBalance}` : `driver owes company ₹${Math.abs(walletBalance)}`})`);
+        explanations.push(`This booking difference (expense - receiving): ₹${bookingDifference} (${bookingDifference === 0 ? "no change" : bookingDifference > 0 ? "company owes driver for this booking" : "driver owes company for this booking"})`);
+        explanations.push(`Projected wallet after applying this booking: ₹${projectedWalletIfSettled} (${projectedWalletIfSettled === 0 ? "balanced" : projectedWalletIfSettled > 0 ? `company will owe driver ₹${projectedWalletIfSettled}` : `driver will owe company ₹${Math.abs(projectedWalletIfSettled)}`})`);
+        if (cashDirection !== "none") {
+          explanations.push(`If you perform full cash settlement now, ${cashDirection === "company_pays_driver" ? `pay driver ₹${cashToZeroWallet}` : `collect from driver ₹${cashToZeroWallet}`} to make wallet zero.`);
+        }
 
         return {
-          ledgerBalance,
-          bookingDelta,
-          newLedgerBalance,
-          effect,
-          driverShouldPayNow,
-          companyShouldPayNow,
+          walletBalance,
+          bookingDifference,
+            projectedWalletIfSettled,
+          action,
+          cashToZeroWallet,
+          cashDirection,
           explanations,
         };
       })()
@@ -825,8 +818,34 @@ const upsertAdminExpense = async (req, res) => {
       if (!Array.isArray(items))
         return res.status(400).json({ message: "billingItems must be array" });
 
+      // Validate items (category and amount)
+      const allowedCategories = ["Parking", "Toll", "MCD", "InterstateTax", "Fuel", "Other"];
+      const validationErrors = [];
+      items.forEach((it, idx) => {
+        if (!it || typeof it !== 'object') {
+          validationErrors.push(`billingItems[${idx}] must be an object`);
+          return;
+        }
+        if (!it.category) validationErrors.push(`billingItems[${idx}].category is required`);
+        else if (!allowedCategories.includes(it.category)) validationErrors.push(`billingItems[${idx}].category must be one of ${allowedCategories.join(', ')}`);
+        if (it.amount == null || it.amount === '') validationErrors.push(`billingItems[${idx}].amount is required`);
+        else if (!Number.isFinite(Number(it.amount))) validationErrors.push(`billingItems[${idx}].amount must be a number`);
+      });
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ message: 'Validation failed', errors: validationErrors });
+      }
+
       // If files uploaded (form-data style) attach images: fields like billingItems[0].image
-      if (req.files) {
+      if (Array.isArray(req.files)) {
+        req.files.forEach((f) => {
+          const field = f.fieldname || "";
+          const m = field.match(/^billingItems\[(\d+)\]\.image$/);
+          if (m) {
+            const idx = parseInt(m[1]);
+            if (items[idx]) items[idx].image = f.path;
+          }
+        });
+      } else if (req.files) {
         for (const field in req.files) {
           const filesArr = req.files[field];
           filesArr.forEach((f) => {
@@ -1071,6 +1090,33 @@ const upsertAdminReceiving = async (req, res) => {
       }
       if (!Array.isArray(items))
         return res.status(400).json({ message: "billingItems must be array" });
+
+      // If files uploaded (form-data style) attach images: fields like billingItems[0].image
+      if (Array.isArray(req.files)) {
+        // multer.any()
+        req.files.forEach((f) => {
+          const field = f.fieldname || "";
+          const m = field.match(/^billingItems\[(\d+)\]\.image$/);
+          if (m) {
+            const idx = parseInt(m[1]);
+            if (items[idx]) items[idx].image = f.path;
+          }
+        });
+      } else if (req.files) {
+        // multer.fields() produces an object of arrays or single objects
+        for (const field in req.files) {
+          const val = req.files[field];
+          const arr = Array.isArray(val) ? val : [val];
+          arr.forEach((f) => {
+            const m = field.match(/^billingItems\[(\d+)\]\.image$/);
+            if (m) {
+              const idx = parseInt(m[1]);
+              if (items[idx]) items[idx].image = f.path;
+            }
+          });
+        }
+      }
+
       receiving.billingItems = items
         .filter((i) => i && i.category && i.amount != null)
         .map((i) => ({
