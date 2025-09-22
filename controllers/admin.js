@@ -36,9 +36,39 @@ const dashboard = async (req, res) => {
 const getAllDrivers = async (req, res) => {
   try {
     const drivers = await User.find().select("-password"); // All users are drivers in this model
+    
+    // Add settlement counts for each driver
+    const driversWithStats = await Promise.all(
+      drivers.map(async (driver) => {
+        const settledCount = await Booking.countDocuments({
+          driver: driver._id,
+          "settlement.isSettled": true
+        });
+
+        const unsettledCount = await Booking.countDocuments({
+          driver: driver._id,
+          "settlement.isSettled": { $ne: true }
+        });
+
+        const totalBookings = await Booking.countDocuments({
+          driver: driver._id
+        });
+
+        return {
+          ...driver.toObject(),
+          settlementStats: {
+            settledCount,
+            unsettledCount,
+            totalBookings,
+            settlementRate: totalBookings > 0 ? ((settledCount / totalBookings) * 100).toFixed(2) + '%' : '0%'
+          }
+        };
+      })
+    );
+
     res.status(200).json({
       message: "Drivers fetched successfully",
-      drivers,
+      drivers: driversWithStats,
     });
   } catch (error) {
     console.error("Get all drivers error:", error);
@@ -338,7 +368,7 @@ const getAllBookings = async (req, res) => {
               key: "Start Date",
               value: { $gte: startDate }, // string compare
             },
-          },
+          }
         },
         {
           data: {
@@ -346,8 +376,8 @@ const getAllBookings = async (req, res) => {
               key: "End Date",
               value: { $lte: endDate },
             },
-          },
-        },
+          }
+        }
       ];
     } else if (startDate) {
       filter.data = {
@@ -835,6 +865,20 @@ const upsertAdminExpense = async (req, res) => {
         return res.status(400).json({ message: 'Validation failed', errors: validationErrors });
       }
 
+      // Preserve existing images when no new image is uploaded
+      if (expense.billingItems && Array.isArray(expense.billingItems)) {
+        items = items.map((item, index) => {
+          // If no new image is provided for this item, keep the existing image
+          if (!item.image && expense.billingItems[index] && expense.billingItems[index].image) {
+            return {
+              ...item,
+              image: expense.billingItems[index].image
+            };
+          }
+          return item;
+        });
+      }
+
       // If files uploaded (form-data style) attach images: fields like billingItems[0].image
       if (Array.isArray(req.files)) {
         req.files.forEach((f) => {
@@ -1091,6 +1135,20 @@ const upsertAdminReceiving = async (req, res) => {
       if (!Array.isArray(items))
         return res.status(400).json({ message: "billingItems must be array" });
 
+      // Preserve existing images when no new image is uploaded
+      if (receiving.billingItems && Array.isArray(receiving.billingItems)) {
+        items = items.map((item, index) => {
+          // If no new image is provided for this item, keep the existing image
+          if (!item.image && receiving.billingItems[index] && receiving.billingItems[index].image) {
+            return {
+              ...item,
+              image: receiving.billingItems[index].image
+            };
+          }
+          return item;
+        });
+      }
+
       // If files uploaded (form-data style) attach images: fields like billingItems[0].image
       if (Array.isArray(req.files)) {
         // multer.any()
@@ -1169,9 +1227,9 @@ const upsertAdminReceiving = async (req, res) => {
       totals: {
         billingSum: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0),
         totalAllowances: receiving.totalAllowances,
-        totalReceivingAmount: receiving.totalReceivingAmount,
-        totalReceiving: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0) + receiving.totalReceivingAmount
-      }
+        receivingAmount: receiving.totalReceivingAmount,
+        totalReceiving: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0) + (receiving.totalReceivingAmount || 0)
+      },
     });
   } catch (err) {
     console.error("upsertAdminReceiving error:", err);
