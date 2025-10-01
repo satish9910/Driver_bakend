@@ -18,12 +18,14 @@ import {
   getDriverBookingById,
   getDriverDetails,
   uploadBookings,
+  getUnassignedBookings,
   getBookingDetail,
   updateBookingStatus,
   settleBooking,
   upsertAdminExpense,
   upsertAdminReceiving,
   upsertAdminDutyInfo,
+  toggleDriverActive,
 } from "../controllers/admin.js";
 
 import {
@@ -76,6 +78,8 @@ router.put(
   authentication,
   editDriver
 );
+// Activate/Deactivate driver (toggle or set isActive)
+router.patch("/drivers/:id/active", authentication, toggleDriverActive);
 router.delete("/delete-driver/:id", authentication, deleteDriver);
 router.get("/driver/:id", authentication, getDriverDetails);
 router.get("/driver-bookings/:driverId", authentication, getDriverBookingById); // Fetch bookings for a specific driver
@@ -97,6 +101,7 @@ router.post(
 );
 router.get("/bookings", authentication, getAllBookings);
 router.get("/booking-keys", authentication, getAllBookingKeys);
+router.get("/bookings/unassigned", authentication, getUnassignedBookings);
 router.put("/assign-driver", authentication, assignDriver);
 router.get("/booking/:id", authentication, getBookingDetail);
 router.put("/booking/:id/status", authentication, updateBookingStatus);

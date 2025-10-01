@@ -31,28 +31,98 @@ const dashboard = async (req, res) => {
   }
 };
 
+// List all unassigned bookings (driver == null)
+const getUnassignedBookings = async (req, res) => {
+  try {
+    const { keys } = req.query;
+
+    const bookings = await Booking.find({ driver: null })
+      .populate({ path: "receiving", model: "Receiving" })
+      .populate({ path: "primaryExpense", model: "Expenses" })
+      .populate({ path: "labels", select: "name color" })
+      .sort({ createdAt: -1 });
+
+    let selectedKeys = [];
+    if (keys) selectedKeys = keys.split(",").map((k) => k.trim());
+
+    const mapped = bookings.map((b) => {
+      const dataMap = {};
+      (b.data || []).forEach((d) => {
+        if (selectedKeys.length === 0 || selectedKeys.includes(d.key)) {
+          dataMap[d.key] = d.value;
+        }
+      });
+      return {
+        _id: b._id,
+        driver: null,
+        status: b.status,
+        data: dataMap,
+        primaryExpense: b.primaryExpense || null,
+        receiving: b.receiving || null,
+        labels: b.labels || [],
+        createdAt: b.createdAt,
+        updatedAt: b.updatedAt,
+      };
+    });
+
+    res.status(200).json(mapped);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching unassigned bookings", error: error.message });
+  }
+};
+
 // GET ALL DRIVERS
 //
 const getAllDrivers = async (req, res) => {
   try {
-    const drivers = await User.find().select("-password"); // All users are drivers in this model
-    
+    const { settlement, walletMin, walletMax, isActive } = req.query;
+
+    const driverFilter = {};
+
+    // Optional active/inactive filter
+    if (typeof isActive !== "undefined" && isActive !== "") {
+      if (isActive === "true" || isActive === true) driverFilter.isActive = true;
+      else if (isActive === "false" || isActive === false) driverFilter.isActive = false;
+    }
+
+    // Wallet balance filter
+    const min = walletMin != null && walletMin !== "" ? Number(walletMin) : undefined;
+    const max = walletMax != null && walletMax !== "" ? Number(walletMax) : undefined;
+    if ((min != null && !Number.isNaN(min)) || (max != null && !Number.isNaN(max))) {
+      driverFilter["wallet.balance"] = {};
+      if (min != null && !Number.isNaN(min)) driverFilter["wallet.balance"].$gte = min;
+      if (max != null && !Number.isNaN(max)) driverFilter["wallet.balance"].$lte = max;
+    }
+
+    // Settlement-based filter: include only drivers that have bookings with that status
+    if (settlement === "settled" || settlement === "unsettled") {
+      const bookingFilter = { driver: { $ne: null } };
+      if (settlement === "settled") bookingFilter["settlement.isSettled"] = true;
+      else bookingFilter["settlement.isSettled"] = { $ne: true };
+      const driverIds = await Booking.distinct("driver", bookingFilter);
+      // If no driverIds match, short-circuit to empty result
+      if (!driverIds || driverIds.length === 0) {
+        return res.status(200).json({ message: "Drivers fetched successfully", drivers: [] });
+      }
+      driverFilter._id = { $in: driverIds };
+    }
+
+    const drivers = await User.find(driverFilter).select("-password");
+
     // Add settlement counts for each driver
     const driversWithStats = await Promise.all(
       drivers.map(async (driver) => {
         const settledCount = await Booking.countDocuments({
           driver: driver._id,
-          "settlement.isSettled": true
+          "settlement.isSettled": true,
         });
 
         const unsettledCount = await Booking.countDocuments({
           driver: driver._id,
-          "settlement.isSettled": { $ne: true }
+          "settlement.isSettled": { $ne: true },
         });
 
-        const totalBookings = await Booking.countDocuments({
-          driver: driver._id
-        });
+        const totalBookings = await Booking.countDocuments({ driver: driver._id });
 
         return {
           ...driver.toObject(),
@@ -60,19 +130,73 @@ const getAllDrivers = async (req, res) => {
             settledCount,
             unsettledCount,
             totalBookings,
-            settlementRate: totalBookings > 0 ? ((settledCount / totalBookings) * 100).toFixed(2) + '%' : '0%'
-          }
+            settlementRate:
+              totalBookings > 0
+                ? ((settledCount / totalBookings) * 100).toFixed(2) + "%"
+                : "0%",
+          },
         };
       })
     );
 
     res.status(200).json({
       message: "Drivers fetched successfully",
+      filters: {
+        settlement: settlement || null,
+        walletMin: min ?? null,
+        walletMax: max ?? null,
+        isActive: typeof driverFilter.isActive === "boolean" ? driverFilter.isActive : null,
+      },
+      count: driversWithStats.length,
       drivers: driversWithStats,
     });
   } catch (error) {
     console.error("Get all drivers error:", error);
     res.status(500).json({ error: "Server error" });
+  }
+};
+
+// Toggle or set a driver's active status (admin/subadmin only)
+const toggleDriverActive = async (req, res) => {
+  try {
+    const role = req.user?.role;
+    if (!role || (role !== "admin" && role !== "subadmin")) {
+      return res.status(403).json({ error: "Forbidden: Admins only" });
+    }
+
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: "Driver ID is required" });
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ error: "Driver not found" });
+
+    let newStatus;
+    if (Object.prototype.hasOwnProperty.call(req.body, "isActive")) {
+      // If provided, coerce to boolean
+      const val = req.body.isActive;
+      newStatus = val === true || val === "true";
+    } else {
+      // Toggle current status
+      newStatus = !user.isActive;
+    }
+
+    user.isActive = newStatus;
+    await user.save();
+
+    return res.status(200).json({
+      message: `Driver ${newStatus ? "activated" : "deactivated"} successfully`,
+      driver: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        mobile: user.mobile,
+        drivercode: user.drivercode,
+        isActive: user.isActive,
+      },
+    });
+  } catch (error) {
+    console.error("Toggle driver active error:", error);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
@@ -136,6 +260,9 @@ const deleteDriver = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
+
+
+
 
 //get driver details
 const getDriverDetails = async (req, res) => {
@@ -256,6 +383,32 @@ function formatExcelDate(value) {
   return String(value);
 }
 
+// Merge existing booking data with incoming row by key (incoming wins on key conflicts)
+function mergeDataByKey(existing = [], incoming = []) {
+  const map = new Map();
+  // Seed with existing values
+  for (const kv of existing) {
+    if (kv && typeof kv.key === 'string') map.set(kv.key, kv.value);
+  }
+  // Apply only non-empty incoming updates
+  for (const kv of incoming) {
+    if (!kv || typeof kv.key !== 'string') continue;
+    const v = kv.value;
+    const isEmptyString = typeof v === 'string' && v.trim() === '';
+    const isNullish = v === null || v === undefined;
+    if (isNullish || isEmptyString) {
+      // skip empty updates to preserve existing value
+      if (!map.has(kv.key)) {
+        // If key was not present at all, we still skip adding empty
+        continue;
+      }
+    } else {
+      map.set(kv.key, v);
+    }
+  }
+  return Array.from(map.entries()).map(([key, value]) => ({ key, value }));
+}
+
 const uploadBookings = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
@@ -268,79 +421,96 @@ const uploadBookings = async (req, res) => {
 
     const workbook = xlsx.readFile(req.file.path);
     const sheetName = workbook.SheetNames[0];
-    const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
-      defval: "",
-    });
+    const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
 
     fs.unlinkSync(req.file.path);
 
-    let valid = [];
-    let invalid = [];
+    let stats = { created: 0, updated: 0, reassigned: 0, unassigned: 0, skipped: 0 };
+    const invalid = [];
 
     for (const row of rows) {
       try {
-        // Extract driver code from Excel row
-        const excelDriverCode = row["Driver Code"]
-          ? String(row["Driver Code"]).trim()
-          : null;
+        const excelDriverCode = row["Driver Code"] ? String(row["Driver Code"]).trim() : null;
+        const excelDutyId = row["Duty Id"] ? String(row["Duty Id"]).trim() : null;
 
-        let driver = null;
-        if (excelDriverCode) {
-          driver = await User.findOne({ drivercode: excelDriverCode });
-        }
-
-        // Convert row to key-value array
+        // Convert row to key-value array with date normalization
         const dataArray = Object.keys(row).map((key) => {
           let value = row[key];
-          if (
-            [
-              "Start Date",
-              "End Date",
-              "Actual Start Date",
-              "Allotment Date",
-              "Dispatched Date",
-              "Cancelled On",
-              "Duty Slip Entry Date",
-              "Duty created at",
-            ].includes(key)
-          ) {
+          if ([
+            "Start Date",
+            "End Date",
+            "Actual Start Date",
+            "Allotment Date",
+            "Dispatched Date",
+            "Cancelled On",
+            "Duty Slip Entry Date",
+            "Duty created at",
+          ].includes(key)) {
             value = formatExcelDate(value);
           }
           return { key, value };
         });
 
-        const booking = new Booking({
-          driver: driver ? driver._id : null,
-          data: dataArray,
-        });
-
-        await booking.save();
-
-        // If driver exists, push booking reference to driver
-        if (driver) {
-          driver.bookings.push(booking._id);
-          await driver.save();
+        // Find driver by code if provided
+        let newDriver = null;
+        if (excelDriverCode) {
+          newDriver = await User.findOne({ drivercode: excelDriverCode });
         }
 
-        valid.push(booking);
+        // Upsert by Duty Id if present; otherwise create new each time
+        let booking = null;
+        if (excelDutyId) {
+          booking = await Booking.findOne({
+            data: { $elemMatch: { key: "Duty Id", value: excelDutyId } },
+          }).populate({ path: "driver", select: "_id drivercode" });
+        }
+
+        if (booking) {
+          // Merge row data to preserve existing keys not present in this upload
+          booking.data = mergeDataByKey(booking.data || [], dataArray);
+
+          const oldDriverId = booking.driver?._id || null;
+          if (newDriver) {
+            if (oldDriverId && String(oldDriverId) === String(newDriver._id)) {
+              await booking.save();
+              stats.updated += 1;
+            } else {
+              booking.driver = newDriver._id;
+              await booking.save();
+              if (oldDriverId) await User.findByIdAndUpdate(oldDriverId, { $pull: { bookings: booking._id } });
+              await User.findByIdAndUpdate(newDriver._id, { $addToSet: { bookings: booking._id } });
+              stats.reassigned += 1;
+            }
+          } else {
+            if (oldDriverId) {
+              booking.driver = null;
+              await booking.save();
+              await User.findByIdAndUpdate(oldDriverId, { $pull: { bookings: booking._id } });
+              stats.unassigned += 1;
+            } else {
+              await booking.save();
+              stats.updated += 1;
+            }
+          }
+        } else {
+          const doc = new Booking({ driver: newDriver ? newDriver._id : null, data: dataArray });
+          await doc.save();
+          if (newDriver) await User.findByIdAndUpdate(newDriver._id, { $addToSet: { bookings: doc._id } });
+          else stats.unassigned += 1;
+          stats.created += 1;
+        }
       } catch (err) {
         invalid.push({ row, error: err.message });
       }
     }
 
-    res.json({
-      message: "File processed successfully",
-      inserted: valid.length,
-      errors: invalid.length,
-      invalidRows: invalid,
-    });
+    res.json({ message: "File processed successfully", ...stats, errors: invalid.length, invalidRows: invalid });
   } catch (error) {
     console.error("Upload bookings error:", error);
-    res
-      .status(500)
-      .json({ message: "Error uploading bookings", error: error.message });
+    res.status(500).json({ message: "Error uploading bookings", error: error.message });
   }
 };
+
 
 // GET /api/bookings/keys
 const getAllBookingKeys = async (req, res) => {
@@ -356,68 +526,98 @@ const getAllBookingKeys = async (req, res) => {
 
 const getAllBookings = async (req, res) => {
   try {
-    const { startDate, endDate, keys } = req.query;
-    let filter = {};
+    const {
+      startDate,
+      endDate,
+      keys,
+      q, // general search
+      dutyId,
+      passengerName,
+      passengerMobile,
+      driverName,
+      driverCode,
+      assigned, // 'assigned' | 'unassigned' | undefined
+      page: pageParam,
+      limit: limitParam,
+    } = req.query;
 
-    // ---- Date filter logic (same as yours) ----
-    if (startDate && endDate) {
-      filter.$and = [
-        {
-          data: {
-            $elemMatch: {
-              key: "Start Date",
-              value: { $gte: startDate }, // string compare
-            },
-          }
-        },
-        {
-          data: {
-            $elemMatch: {
-              key: "End Date",
-              value: { $lte: endDate },
-            },
-          }
-        }
-      ];
-    } else if (startDate) {
-      filter.data = {
-        $elemMatch: {
-          key: "Start Date",
-          value: { $gte: startDate },
-        },
-      };
-    } else if (endDate) {
-      filter.data = {
-        $elemMatch: {
-          key: "End Date",
-          value: { $lte: endDate },
-        },
-      };
+    // Pagination params
+    let page = parseInt(pageParam, 10);
+    let limit = parseInt(limitParam, 10);
+    if (!Number.isFinite(page) || page < 1) page = 1;
+    if (!Number.isFinite(limit) || limit < 1) limit = 20;
+    const maxLimit = 100;
+    if (limit > maxLimit) limit = maxLimit;
+
+    const escapeRegex = (s) => s?.replace?.(/[.*+?^${}()|[\]\\]/g, "\\$&") || "";
+
+    const filter = {};
+    const andConds = [];
+    const orConds = [];
+
+    // Date filters (string comparisons as existing)
+    if (startDate) andConds.push({ data: { $elemMatch: { key: "Start Date", value: { $gte: startDate } } } });
+    if (endDate) andConds.push({ data: { $elemMatch: { key: "End Date", value: { $lte: endDate } } } });
+
+    // Assigned/unassigned filter
+    if (assigned === 'assigned') filter.driver = { $ne: null };
+    else if (assigned === 'unassigned') filter.driver = null;
+
+    // Specific field filters
+    if (dutyId) andConds.push({ data: { $elemMatch: { key: "Duty Id", value: new RegExp(escapeRegex(dutyId), 'i') } } });
+    if (passengerName) andConds.push({ data: { $elemMatch: { key: "Passengers", value: new RegExp(escapeRegex(passengerName), 'i') } } });
+    if (passengerMobile) andConds.push({ data: { $elemMatch: { key: "Passenger Phone Numbers", value: new RegExp(escapeRegex(passengerMobile), 'i') } } });
+
+    // Build general search (q) OR block across data keys and driver
+    let driverIdsForSearch = [];
+    const driverSearchTerms = [];
+    if (driverName) driverSearchTerms.push({ name: { $regex: new RegExp(escapeRegex(driverName), 'i') } });
+    if (driverCode) driverSearchTerms.push({ drivercode: { $regex: new RegExp(escapeRegex(driverCode), 'i') } });
+    if (q) {
+      // For driver side of OR in q
+      driverSearchTerms.push({ name: { $regex: new RegExp(escapeRegex(q), 'i') } });
+      driverSearchTerms.push({ drivercode: { $regex: new RegExp(escapeRegex(q), 'i') } });
+      driverSearchTerms.push({ mobile: { $regex: new RegExp(escapeRegex(q), 'i') } });
+      // For data side of OR in q
+      ["Duty Id", "Passengers", "Passenger Phone Numbers", "Driver Phone Number"].forEach((key) => {
+        orConds.push({ data: { $elemMatch: { key, value: new RegExp(escapeRegex(q), 'i') } } });
+      });
     }
 
-    // ---- Fetch bookings ----
-    const bookings = await Booking.find(filter)
-      .populate({ path: "driver", select: "-password" })
-      .populate({ path: "expenses", model: "Expenses" })
-      .populate({ path: "primaryExpense", model: "Expenses" })
-      .populate({ path: "receiving", model: "Receiving" })
-      .populate({ path: "labels", select: "name color" })
-      .sort({ createdAt: -1 });
+    if (driverSearchTerms.length > 0) {
+      const drivers = await User.find({ $or: driverSearchTerms }).select('_id');
+      driverIdsForSearch = drivers.map((d) => d._id);
+      if (driverIdsForSearch.length > 0) {
+        orConds.push({ driver: { $in: driverIdsForSearch } });
+      }
+    }
 
-    // ---- Handle selected keys ----
+    if (orConds.length > 0) andConds.push({ $or: orConds });
+    if (andConds.length > 0) filter.$and = andConds;
+
+    const [total, bookings] = await Promise.all([
+      Booking.countDocuments(filter),
+      Booking.find(filter)
+        .populate({ path: "driver", select: "-password" })
+        .populate({ path: "expenses", model: "Expenses" })
+        .populate({ path: "primaryExpense", model: "Expenses" })
+        .populate({ path: "receiving", model: "Receiving" })
+        .populate({ path: "labels", select: "name color" })
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
+    ]);
+
     let selectedKeys = [];
-    if (keys) {
-      selectedKeys = keys.split(",").map((k) => k.trim());
-    }
+    if (keys) selectedKeys = keys.split(",").map((k) => k.trim());
 
     const filteredBookings = bookings.map((booking) => {
       const dataMap = {};
-      booking.data.forEach((d) => {
+      (booking.data || []).forEach((d) => {
         if (selectedKeys.length === 0 || selectedKeys.includes(d.key)) {
           dataMap[d.key] = d.value;
         }
       });
-
       return {
         _id: booking._id,
         driver: booking.driver,
@@ -426,52 +626,40 @@ const getAllBookings = async (req, res) => {
         receiving: booking.receiving || null,
         status: booking.status,
         labels: booking.labels || [],
-        data: dataMap, // only selected keys
+        data: dataMap,
         createdAt: booking.createdAt,
         updatedAt: booking.updatedAt,
       };
     });
 
-    res.status(200).json(filteredBookings);
-  } catch (error) {
-    res.status(500).json({
-      message: "Error fetching bookings",
-      error: error.message,
+    res.status(200).json({
+      success: true,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+      count: filteredBookings.length,
+      data: filteredBookings,
     });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching bookings", error: error.message });
   }
 };
 
 // POST /api/bookings/filter
+
 const filterBookings = async (req, res) => {
   try {
-    const { startDate, endDate, keys } = req.body;
+    const { startDate, endDate, keys } = req.body || {};
     let filter = {};
 
-    // ---- Date filter (optional) ----
     if (startDate || endDate) {
-      const dateConditions = [];
-
-      if (startDate) {
-        dateConditions.push({
-          data: {
-            $elemMatch: { key: "Start Date", value: { $gte: startDate } },
-          },
-        });
-      }
-
-      if (endDate) {
-        dateConditions.push({
-          data: {
-            $elemMatch: { key: "End Date", value: { $lte: endDate } },
-          },
-        });
-      }
-
-      // Use $and only if multiple conditions
-      filter.$and = dateConditions;
+      const dateConds = [];
+      if (startDate) dateConds.push({ data: { $elemMatch: { key: "Start Date", value: { $gte: startDate } } } });
+      if (endDate) dateConds.push({ data: { $elemMatch: { key: "End Date", value: { $lte: endDate } } } });
+      if (dateConds.length > 1) filter.$and = dateConds; else if (dateConds.length === 1) filter = dateConds[0];
     }
 
-    // ---- Fetch bookings ----
     const bookings = await Booking.find(filter)
       .populate({ path: "driver", select: "name drivercode" })
       .populate({ path: "expenses", model: "Expenses" })
@@ -480,45 +668,33 @@ const filterBookings = async (req, res) => {
       .populate({ path: "labels", select: "name color" })
       .sort({ createdAt: -1 });
 
-    // ---- Filter keys from request ----
-    const filteredBookings = bookings.map((booking) => {
+    const filtered = bookings.map((b) => {
       const dataMap = {};
-
-      booking.data.forEach((d) => {
-        if (!keys || keys.length === 0 || keys.includes(d.key)) {
-          dataMap[d.key] = d.value;
-        }
+      (b.data || []).forEach((d) => {
+        if (!keys || keys.length === 0 || keys.includes(d.key)) dataMap[d.key] = d.value;
       });
-
       return {
-        _id: booking._id,
-        driver: booking.driver,
-        expenses: booking.expenses,
-        primaryExpense: booking.primaryExpense || null,
-        receiving: booking.receiving || null,
-        status: booking.status,
-        labels: booking.labels || [],
-        data: dataMap, // only requested keys
-        createdAt: booking.createdAt,
-        updatedAt: booking.updatedAt,
+        _id: b._id,
+        driver: b.driver,
+        expenses: b.expenses,
+        primaryExpense: b.primaryExpense || null,
+        receiving: b.receiving || null,
+        status: b.status,
+        labels: b.labels || [],
+        data: dataMap,
+        createdAt: b.createdAt,
+        updatedAt: b.updatedAt,
       };
     });
 
-    res
-      .status(200)
-      .json({
-        success: true,
-        count: filteredBookings.length,
-        data: filteredBookings,
-      });
+    res.status(200).json({ success: true, count: filtered.length, data: filtered });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error filtering bookings",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Error filtering bookings", error: error.message });
   }
 };
+
+
+
 
 const assignDriver = async (req, res) => {
   try {
@@ -865,20 +1041,6 @@ const upsertAdminExpense = async (req, res) => {
         return res.status(400).json({ message: 'Validation failed', errors: validationErrors });
       }
 
-      // Preserve existing images when no new image is uploaded
-      if (expense.billingItems && Array.isArray(expense.billingItems)) {
-        items = items.map((item, index) => {
-          // If no new image is provided for this item, keep the existing image
-          if (!item.image && expense.billingItems[index] && expense.billingItems[index].image) {
-            return {
-              ...item,
-              image: expense.billingItems[index].image
-            };
-          }
-          return item;
-        });
-      }
-
       // If files uploaded (form-data style) attach images: fields like billingItems[0].image
       if (Array.isArray(req.files)) {
         req.files.forEach((f) => {
@@ -1135,20 +1297,6 @@ const upsertAdminReceiving = async (req, res) => {
       if (!Array.isArray(items))
         return res.status(400).json({ message: "billingItems must be array" });
 
-      // Preserve existing images when no new image is uploaded
-      if (receiving.billingItems && Array.isArray(receiving.billingItems)) {
-        items = items.map((item, index) => {
-          // If no new image is provided for this item, keep the existing image
-          if (!item.image && receiving.billingItems[index] && receiving.billingItems[index].image) {
-            return {
-              ...item,
-              image: receiving.billingItems[index].image
-            };
-          }
-          return item;
-        });
-      }
-
       // If files uploaded (form-data style) attach images: fields like billingItems[0].image
       if (Array.isArray(req.files)) {
         // multer.any()
@@ -1227,9 +1375,9 @@ const upsertAdminReceiving = async (req, res) => {
       totals: {
         billingSum: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0),
         totalAllowances: receiving.totalAllowances,
-        receivingAmount: receiving.totalReceivingAmount,
-        totalReceiving: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0) + (receiving.totalReceivingAmount || 0)
-      },
+        totalReceivingAmount: receiving.totalReceivingAmount,
+        totalReceiving: (receiving.billingItems || []).reduce((s, i) => s + (Number(i.amount) || 0), 0) + receiving.totalReceivingAmount
+      }
     });
   } catch (err) {
     console.error("upsertAdminReceiving error:", err);
@@ -1347,64 +1495,147 @@ const upsertAdminDutyInfo = async (req, res) => {
   }
 };
 
-//getdriverbookingbyid
-
+// Get driver bookings by driverId with pagination and filters
 const getDriverBookingById = async (req, res) => {
   try {
     const { driverId } = req.params;
-    if (!driverId) {
-      return res.status(400).json({ message: "Driver ID is required" });
+    if (!driverId) return res.status(400).json({ message: "Driver ID is required" });
+
+    // Basic driver info (no heavy population here)
+    const driver = await User.findById(driverId).select("name drivercode");
+    if (!driver) return res.status(404).json({ message: "Driver not found" });
+
+    // Query params
+    const {
+      page = 1,
+      limit = 20,
+      dutyId,
+      q, // global search across any data value/key
+      settled, // 'true' | 'false'
+      startDate, // filter by Start Date in booking.data
+      endDate,   // filter by End Date in booking.data
+    } = req.query;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(Math.min(parseInt(limit, 10) || 20, 100), 1);
+
+    const andConds = [{ driver: driverId }];
+
+    // Duty Id filter (partial, case-insensitive)
+    if (dutyId && String(dutyId).trim() !== "") {
+      andConds.push({
+        data: {
+          $elemMatch: {
+            key: "Duty Id",
+            value: { $regex: new RegExp(String(dutyId).trim(), "i") },
+          },
+        },
+      });
     }
 
-    const driver = await User.findById(driverId)
-      .select("name drivercode bookings")
-      .populate({
-        path: "bookings",
-        options: { sort: { createdAt: -1 } },
-        populate: [
-          { path: "primaryExpense", model: "Expenses" },
-          // include all individual expenses if needed
-          { path: "expenses", model: "Expenses" },
-          { path: "receiving", model: "Receiving" },
-          { path: "labels", select: "name color" },
-          { path: "driver", select: "name drivercode" },
+    // Global search across data values and keys (case-insensitive)
+    if (q && String(q).trim() !== "") {
+      const rx = new RegExp(String(q).trim(), "i");
+      andConds.push({
+        $or: [
+          { data: { $elemMatch: { value: rx } } },
+          { data: { $elemMatch: { key: rx } } },
         ],
       });
-
-    if (!driver) {
-      return res.status(404).json({ message: "Driver not found" });
     }
 
-    const bookings = driver.bookings.map((b) => ({
+    // Settled/unsettled filter
+    if (typeof settled !== "undefined" && settled !== "") {
+      if (settled === "true" || settled === true) {
+        andConds.push({ "settlement.isSettled": true });
+      } else if (settled === "false" || settled === false) {
+        andConds.push({ "settlement.isSettled": { $ne: true } });
+      }
+    }
+
+    // Date-wise filter using Start Date and End Date from booking.data
+    if (startDate || endDate) {
+      const dateConds = [];
+      if (startDate) {
+        dateConds.push({
+          data: {
+            $elemMatch: {
+              key: "Start Date",
+              value: { $gte: startDate }
+            }
+          }
+        });
+      }
+      if (endDate) {
+        dateConds.push({
+          data: {
+            $elemMatch: {
+              key: "End Date",
+              value: { $lte: endDate }
+            }
+          }
+        });
+      }
+      if (dateConds.length === 1) {
+        andConds.push(dateConds[0]);
+      } else if (dateConds.length === 2) {
+        andConds.push({ $and: dateConds });
+      }
+    }
+
+    const filter = andConds.length ? { $and: andConds } : {};
+
+    const total = await Booking.countDocuments(filter);
+    const pages = Math.ceil(total / limitNum) || 1;
+    const skip = (pageNum - 1) * limitNum;
+
+    const bookings = await Booking.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate({ path: "primaryExpense", model: "Expenses" })
+      .populate({ path: "expenses", model: "Expenses" })
+      .populate({ path: "receiving", model: "Receiving" })
+      .populate({ path: "labels", select: "name color" })
+      .populate({ path: "driver", select: "name drivercode" });
+
+    const items = bookings.map((b) => ({
       _id: b._id,
       status: b.status,
       data: b.data,
       primaryExpense: b.primaryExpense || null,
       receiving: b.receiving || null,
-      // expenses: b.expenses || [],
       labels: b.labels || [],
       createdAt: b.createdAt,
       updatedAt: b.updatedAt,
+      settlement: b.settlement || null,
     }));
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      driver: {
-        _id: driver._id,
-        name: driver.name,
-        drivercode: driver.drivercode,
+      driver: { _id: driver._id, name: driver.name, drivercode: driver.drivercode },
+      filters: {
+        dutyId: dutyId || null,
+        q: q || null,
+        settled: typeof settled === "string" ? settled : null,
+        startDate: startDate || null,
+        endDate: endDate || null,
       },
-      count: bookings.length,
-      bookings,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages,
+        count: items.length,
+      },
+      bookings: items,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error fetching driver bookings",
-      error: error.message,
-    });
+    console.error("getDriverBookingById error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
+
 
 export {
   getAllDrivers,
@@ -1426,4 +1657,6 @@ export {
   upsertAdminExpense,
   upsertAdminReceiving,
   upsertAdminDutyInfo,
+  getUnassignedBookings,
+  toggleDriverActive,
 };
